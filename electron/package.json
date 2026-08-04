@@ -1,0 +1,73 @@
+{
+  "name": "seedmask-coordinator",
+  "version": "1.0.0",
+  "productName": "SeedMask Coordinator",
+  "description": "SeedMask Coordinator - cross-platform desktop (watch-only)",
+  "main": "./out/main/index.js",
+  "author": "SeedMask",
+  "license": "MIT",
+  "private": false,
+  "scripts": {
+    "sync:icon": "bash scripts/sync_app_icon.sh",
+    "predev": "bash scripts/sync_app_icon.sh",
+    "dev": "electron-vite dev",
+    "open:app": "bash scripts/install_to_applications.sh && open '/Applications/SeedMask Coordinator.app'",
+    "run:app": "npm run build && electron-builder --mac --dir --config electron-builder.yml && npm run open:app",
+    "install:app": "bash scripts/install_to_applications.sh",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "bundle:runtime": "bash scripts/bundle_runtime.sh",
+    "release": "bash scripts/prepare_release.sh",
+    "release:from-repo": "bash ../release.sh",
+    "release:runtime-only": "bash scripts/prepare_release.sh --runtime-only",
+    "release:dev-package": "bash scripts/prepare_release.sh --skip-runtime",
+    "package": "npm run build && electron-builder --config electron-builder.yml",
+    "package:mac": "npm run build && electron-builder --mac --config electron-builder.yml",
+    "package:win": "npm run build && electron-builder --win --config electron-builder.yml",
+    "package:linux": "npm run build && electron-builder --linux --config electron-builder.yml",
+    "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json"
+  },
+  "dependencies": {
+    "@ledgerhq/devices": "8.15.1",
+    "@ledgerhq/errors": "^6.37.0",
+    "@ledgerhq/hw-transport-node-ble": "^6.28.5",
+    "@ledgerhq/hw-transport-node-hid": "^6.33.5",
+    "@ngraveio/bc-ur": "^1.1.6",
+    "@noble/hashes": "^1.8.0",
+    "@onekeyfe/hd-common-connect-sdk": "^1.1.31",
+    "@onekeyfe/hd-transport-electron": "^1.1.31",
+    "@stoprocent/noble": "^2.3.16",
+    "buffer": "^6.0.3",
+    "jsqr": "^1.4.0",
+    "ledger-bitcoin": "^0.3.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "usb": "2.18.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
+    "@types/node": "^22.20.1",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.4.1",
+    "electron": "^35.1.5",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^3.1.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vite-plugin-node-polyfills": "^0.28.0"
+  },
+  "overrides": {
+    "usb": "2.18.0",
+    "@ledgerhq/devices": "8.15.1"
+  },
+  "allowScripts": {
+    "node-hid@2.1.2": true,
+    "usb@2.18.0": true,
+    "@stoprocent/noble@2.3.16": true,
+    "@abandonware/noble@1.9.2-23": true,
+    "@stoprocent/bluetooth-hci-socket@2.2.6": true
+  }
+}

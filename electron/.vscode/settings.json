@@ -1,0 +1,18 @@
+{
+  "npm.exclude": [
+    "**/release/**",
+    "**/node_modules/**",
+    "**/build/**",
+    "**/out/**"
+  ],
+  "npm.autoDetect": "off",
+  "files.watcherExclude": {
+    "**/release/**": true,
+    "**/node_modules/**": true,
+    "**/out/**": true
+  },
+  "search.exclude": {
+    "**/release/**": true,
+    "**/node_modules/**": true
+  }
+}

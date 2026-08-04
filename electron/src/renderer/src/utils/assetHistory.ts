@@ -1,0 +1,255 @@
+import type { CoinChain, WalletTxDTO } from '@renderer/api/types'
+import {
+  dedupeWalletTransactions,
+  normalizeWalletTx,
+  txAmount,
+  txBlockTime,
+  txId,
+  txIsInternalTransfer,
+  txIsReceived,
+} from '@renderer/utils/txHelpers'
+
+export type AssetHistoryPeriod = '1W' | '1M' | '3M' | '1Y' | 'All'
+
+export const ASSET_HISTORY_PERIODS: AssetHistoryPeriod[] = ['1W', '1M', '3M', '1Y', 'All']
+
+export interface AssetFlowEvent {
+  tx: WalletTxDTO
+  index: number
+  date: Date
+  coinAmount: number
+  fiatAmount?: number
+  isInflow: boolean
+  id: string
+}
+
+export interface AssetBalanceStep {
+  eventIndex: number
+  balance: number
+}
+
+export interface AssetBalanceSeries {
+  openingBalance: number
+  steps: AssetBalanceStep[]
+  closingBalance: number
+}
+
+export function periodStartDate(period: AssetHistoryPeriod, now = new Date()): Date | null {
+  const d = new Date(now)
+  d.setHours(0, 0, 0, 0)
+  switch (period) {
+    case '1W':
+      d.setDate(d.getDate() - 7)
+      return d
+    case '1M':
+      d.setDate(d.getDate() - 30)
+      return d
+    case '3M':
+      d.setDate(d.getDate() - 90)
+      return d
+    case '1Y':
+      d.setDate(d.getDate() - 365)
+      return d
+    case 'All':
+      return null
+  }
+}
+
+/** True when event date falls inside the selected period (inclusive of period start day). */
+export function isInPeriod(event: Date, since: Date | null): boolean {
+  if (!since) return true
+  return event.getTime() >= since.getTime()
+}
+
+export function periodSummaryTitle(period: AssetHistoryPeriod): string {
+  switch (period) {
+    case '1W':
+      return 'Last 7 days'
+    case '1M':
+      return 'Last 30 days'
+    case '3M':
+      return 'Last 3 months'
+    case '1Y':
+      return 'Last 12 months'
+    case 'All':
+      return 'All time'
+  }
+}
+
+export function eventDate(tx: WalletTxDTO): Date | null {
+  const t = txBlockTime(tx)
+  if (t > 0) return new Date(t * 1000)
+  return null
+}
+
+/** On-chain txs in the selected period — same dedupe rules as the dashboard list. */
+export function walletTransactionsInPeriod(
+  transactions: WalletTxDTO[],
+  since: Date | null,
+  chain: CoinChain,
+): WalletTxDTO[] {
+  const deduped = dedupeWalletTransactions(transactions, chain)
+  if (!since) return deduped
+  return deduped.filter((tx) => {
+    const date = eventDate(tx)
+    return date != null && isInPeriod(date, since)
+  })
+}
+
+export function flowEventId(tx: WalletTxDTO, fallbackIndex: number): string {
+  const id = txId(tx)
+  if (id) return id
+  return `tx-${fallbackIndex}-${txBlockTime(tx)}-${(tx.direction ?? 'u').trim()}`
+}
+
+export function flowEvents(
+  transactions: WalletTxDTO[],
+  since: Date | null,
+  fiatByTxId: Record<string, number>,
+  walletAddresses: ReadonlySet<string> = new Set(),
+  chain: CoinChain = 'kaspa',
+): AssetFlowEvent[] {
+  const dated = transactions
+    .map((tx, index) => ({ tx: normalizeWalletTx(tx), date: eventDate(tx), index }))
+    .filter((row): row is { tx: WalletTxDTO; date: Date; index: number } => row.date != null)
+  const sorted = dated.sort((a, b) => a.date.getTime() - b.date.getTime())
+  const events: AssetFlowEvent[] = []
+  const seen = new Set<string>()
+  for (const { tx, date, index } of sorted) {
+    if (since && !isInPeriod(date, since)) continue
+    const id = flowEventId(tx, index)
+    if (seen.has(id)) continue
+    seen.add(id)
+    const coinAmount = Math.abs(txAmount(tx))
+    const internal = txIsInternalTransfer(tx, walletAddresses, chain)
+    if (internal) continue
+    events.push({
+      tx,
+      index: events.length,
+      date,
+      coinAmount,
+      fiatAmount: fiatByTxId[txId(tx) || id],
+      isInflow: txIsReceived(tx),
+      id,
+    })
+  }
+  return events
+}
+
+export function balanceSeries(
+  events: AssetFlowEvent[],
+  currentBalance: number,
+  _allTransactions: WalletTxDTO[] = [],
+  periodStart: Date | null = null,
+  _walletAddresses: ReadonlySet<string> = new Set(),
+  _chain: CoinChain = 'kaspa',
+): AssetBalanceSeries {
+  const closing = Math.max(0, currentBalance)
+  const periodNet = events.reduce(
+    (partial, event) => partial + (event.isInflow ? event.coinAmount : -event.coinAmount),
+    0,
+  )
+  const opening = periodStart === null ? 0 : Math.max(0, closing - periodNet)
+
+  let running = opening
+  const steps: AssetBalanceStep[] = []
+  for (const event of events) {
+    running = Math.max(0, running + (event.isInflow ? event.coinAmount : -event.coinAmount))
+    steps.push({ eventIndex: event.index, balance: running })
+  }
+
+  if (steps.length > 0 && Math.abs(steps[steps.length - 1]!.balance - closing) > 1e-10) {
+    steps[steps.length - 1] = {
+      eventIndex: steps[steps.length - 1]!.eventIndex,
+      balance: closing,
+    }
+  }
+
+  return { openingBalance: opening, steps, closingBalance: closing }
+}
+
+/** Full-precision flow amount for In / Out / Net headers (8 dp for BTC/KAS). */
+export function formatFlowAmount(value: number, useSats = false): string {
+  const abs = Math.abs(value)
+  if (useSats) return Math.round(abs).toLocaleString('en-US')
+  return formatBalanceDisplay(abs, false)
+}
+
+export function formatBalanceAxis(value: number, useSats = false): string {
+  return formatBalanceDisplay(value, useSats)
+}
+
+export function formatBalanceDisplay(value: number, useSats = false): string {
+  if (useSats) {
+    return Math.max(0, Math.round(value)).toLocaleString('en-US')
+  }
+  let text = value.toFixed(8)
+  if (text.includes('.')) {
+    while (text.endsWith('0')) text = text.slice(0, -1)
+    if (text.endsWith('.')) text = text.slice(0, -1)
+  }
+  return text
+}
+
+export function floorBalanceLabel(value: number, useSats = false): number {
+  if (useSats) {
+    if (value <= 0) return 0
+    return Math.floor(value)
+  }
+  if (value <= 0) return 0
+  if (value >= 1) return Math.floor(value)
+  if (value >= 0.01) return Math.floor(value * 100) / 100
+  return Math.floor(value * 1_000_000) / 1_000_000
+}
+
+export function ceilBalanceLabel(value: number, useSats = false): number {
+  if (useSats) {
+    if (value <= 0) return 0
+    return Math.ceil(value)
+  }
+  if (value <= 0) return 0
+  if (value >= 1) return Math.ceil(value)
+  if (value >= 0.01) return Math.ceil(value * 100) / 100
+  return Math.ceil(value * 1_000_000) / 1_000_000
+}
+
+export function formatCompactCoin(value: number): string {
+  if (value >= 100) return value.toFixed(2)
+  if (value >= 1) return value.toFixed(4)
+  return value.toFixed(6)
+}
+
+export function formatAxisDate(date: Date, period: AssetHistoryPeriod): string {
+  const opts: Intl.DateTimeFormatOptions =
+    period === 'All'
+      ? { month: 'short', year: '2-digit' }
+      : period === '3M' || period === '1Y'
+        ? { month: 'short', day: 'numeric' }
+        : { day: 'numeric', month: 'short' }
+  return date.toLocaleDateString(undefined, opts)
+}
+
+/** Per-transaction bar label — always includes day so All-time txs stay distinguishable. */
+export function formatBarAxisDate(date: Date, period: AssetHistoryPeriod): string {
+  if (period === 'All' || period === '1Y') {
+    return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: '2-digit' })
+  }
+  return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+}
+
+export function formatHoverDate(date: Date): string {
+  return date.toLocaleDateString(undefined, { dateStyle: 'medium' })
+}
+
+export function formatHoverTime(date: Date): string {
+  return date.toLocaleTimeString(undefined, { timeStyle: 'short' })
+}
+
+export function formatExactDate(date: Date): string {
+  return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+/** Convert chart coin amount to BTC/KAS units for fiat pricing (sats → BTC). */
+export function coinUnitsForFiat(amount: number, useSats: boolean): number {
+  return useSats ? amount / 100_000_000 : amount
+}

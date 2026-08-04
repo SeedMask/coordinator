@@ -1,0 +1,12 @@
+# Track rusty-kaspa mass/fee rules (Toccata); requires v2.0.1+ for post-June 2026 mainnet.
+kaspa>=2.0.1
+embit>=0.8.0
+qrcode[pil]>=8.0
+Pillow>=10.0.0
+opencv-python-headless>=4.8.0
+
+# Native Mac app (Swift) + optional browser UI
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+httpx>=0.27.0
+websockets>=13.0
