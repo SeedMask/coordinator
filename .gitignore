@@ -1,0 +1,38 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Node / Electron
+node_modules/
+electron/node_modules/
+electron/out/
+electron/release/
+electron/dist/
+electron/build/
+electron/*.tsbuildinfo
+.cache/
+*.log
+
+# Installers / binaries (publish via GitHub Releases)
+*.dmg
+*.exe
+*.AppImage
+*.deb
+*.rpm
+
+# Local / bulky vendored archives (fetch via setup script)
+tools/kaspa_wasm_node/sdk.zip
+tools/kaspa_wasm_node/kaspa-wasm.tgz
+tools/kaspa_wasm_node/kaspa-wasm32-sdk-*.zip
+
+# Old local download staging (site lives at SeedMask/seedmask.io)
+website/downloads/
+electron/.cache/

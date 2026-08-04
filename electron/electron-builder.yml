@@ -1,0 +1,87 @@
+appId: com.seedmask.coordinator
+productName: SeedMask Coordinator
+copyright: Copyright © SeedMask
+
+# Unsigned local builds: electron-builder can write a stale ElectronAsarIntegrity hash
+# that does not match app.asar, which makes Electron exit with a blank window on macOS.
+disableAsarIntegrity: true
+
+electronFuses:
+  enableEmbeddedAsarIntegrityValidation: false
+  onlyLoadAppFromAsar: false
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**/*
+  - package.json
+
+# Native USB/HID addons cannot load from inside asar.
+asarUnpack:
+  - "**/{node-hid,usb,bindings,file-uri-to-path,@abandonware,@stoprocent}/**/*"
+  - "**/HID.node"
+  - "**/usb_*.node"
+  - "**/*.node"
+
+extraResources:
+  - from: ../
+    to: coordinator
+    filter:
+      - run_backend.py
+      - app/**/*
+      - requirements.txt
+      - VERSION.txt
+      - BUILD_STAMP.txt
+  # Prefer Coordinator tools (kept in sync with the app). SeedPass_UI_Shell/tools is a fallback mirror.
+  - from: ../tools
+    to: coordinator/tools
+    filter:
+      - "**/*"
+  - from: build/runtime
+    to: runtime
+    filter:
+      - "**/*"
+
+mac:
+  category: public.app-category.finance
+  icon: build/icon.icns
+  target:
+    - dmg
+    - zip
+  # Local/dev machines often have no Developer ID. Ad-hoc sign so Bluetooth entitlements
+  # are actually embedded (unsigned apps silently fail BLE scans on modern macOS).
+  identity: '-'
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSBluetoothAlwaysUsageDescription: SeedMask Coordinator uses Bluetooth to connect Ledger and OneKey hardware wallets.
+    NSBluetoothPeripheralUsageDescription: SeedMask Coordinator uses Bluetooth to connect Ledger and OneKey hardware wallets.
+
+win:
+  icon: build/icon.png
+  target:
+    - nsis
+    - zip
+
+linux:
+  icon: build/icon.png
+  target:
+    - AppImage
+    - deb
+  category: Finance
+  maintainer: SeedMask
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: SeedMask Coordinator
+
+dmg:
+  title: SeedMask Coordinator
+  artifactName: SeedMask-Coordinator-${version}-${arch}.${ext}
+
+artifactName: SeedMask-Coordinator-${version}-${os}-${arch}.${ext}

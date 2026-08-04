@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Prepare a self-contained SeedMask Coordinator installer for the current OS.
+#
+# Usage:
+#   ./scripts/prepare_release.sh           # bundle runtime + package current OS
+#   ./scripts/prepare_release.sh --runtime-only
+#   ./scripts/prepare_release.sh --skip-runtime   # dev: system Python OK
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ELECTRON_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+if [[ ! -f "$ELECTRON_DIR/package.json" ]]; then
+  echo "error: run from SeedMask_Coordinator/electron" >&2
+  echo "  cd SeedMask_Coordinator/electron && npm run release" >&2
+  echo "  or: bash SeedMask_Coordinator/release.sh" >&2
+  exit 1
+fi
+
+bash "$SCRIPT_DIR/preflight.sh"
+COORD="$(cd "$ELECTRON_DIR/.." && pwd)"
+REPO="$(cd "$COORD/.." && pwd)"
+FIRMWARE_TOOLS="$REPO/SeedPass_UI_Shell/tools"
+APP_VERSION="$(node -p "require('$ELECTRON_DIR/package.json').version" 2>/dev/null || echo 1.0.0)"
+STAMP="$(date '+%Y-%m-%d %H:%M:%S')"
+
+RUNTIME_ONLY=0
+SKIP_RUNTIME=0
+for arg in "$@"; do
+  case "$arg" in
+    --runtime-only) RUNTIME_ONLY=1 ;;
+    --skip-runtime) SKIP_RUNTIME=1 ;;
+  esac
+done
+
+echo "SeedMask Coordinator release prep v$APP_VERSION"
+echo "Build stamp: $STAMP"
+
+mkdir -p "$ELECTRON_DIR/build"
+bash "$SCRIPT_DIR/sync_app_icon.sh"
+echo "$APP_VERSION" > "$COORD/VERSION.txt"
+echo "build $STAMP" > "$COORD/BUILD_STAMP.txt"
+
+echo "Syncing SeedPass tools into coordinator/tools…"
+mkdir -p "$COORD/tools"
+rsync -a --delete "$FIRMWARE_TOOLS/" "$COORD/tools/"
+
+if [[ "$SKIP_RUNTIME" -eq 0 ]]; then
+  bash "$SCRIPT_DIR/bundle_runtime.sh" "$ELECTRON_DIR/build/runtime"
+fi
+
+if [[ "$RUNTIME_ONLY" -eq 1 ]]; then
+  echo "Runtime bundled (--runtime-only). Skipping electron packaging."
+  exit 0
+fi
+
+cd "$ELECTRON_DIR"
+npm run build
+
+# Rebuild native USB/HID addons against this Electron ABI (required for Ledger in the .app).
+if [[ -f "$ELECTRON_DIR/node_modules/.bin/electron-rebuild" ]] || npx --no-install electron-rebuild --version >/dev/null 2>&1; then
+  echo "Rebuilding node-hid/usb for Electron…"
+  npx electron-rebuild -f -w node-hid,usb
+else
+  echo "warn: @electron/rebuild not available — Ledger USB may fail in the packaged app"
+fi
+
+case "$(uname -s)" in
+  Darwin) npm run package:mac ;;
+  Linux) npm run package:linux ;;
+  MINGW*|MSYS*|CYGWIN*) npm run package:win ;;
+  *)
+    if [[ "${OS:-}" == "Windows_NT" ]]; then
+      npm run package:win
+    else
+      npm run package
+    fi
+    ;;
+esac
+
+if [[ "$(uname -s)" == Darwin ]]; then
+  APP="$ELECTRON_DIR/release/mac-arm64/SeedMask Coordinator.app"
+  if [[ -d "$APP" ]]; then
+    # Do NOT run recursive xattr on the Desktop build tree — that triggers TCC.
+    # Quarantine is cleared only after copying into /Applications.
+    bash "$SCRIPT_DIR/install_to_applications.sh" || true
+  fi
+fi
+
+echo ""
+echo "Installers written to: $ELECTRON_DIR/release/"
+ls -la "$ELECTRON_DIR/release/" 2>/dev/null || true
+
+if [[ "$SKIP_RUNTIME" -eq 0 ]]; then
+  bash "$SCRIPT_DIR/smoke_test_backend.sh" "$ELECTRON_DIR/build/runtime" "$COORD"
+fi
+
+bash "$SCRIPT_DIR/sync_website_downloads.sh" 2>/dev/null || true

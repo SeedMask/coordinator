@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SeedMask Coordinator — Download</title>
+  <meta name="description" content="Watch-only desktop companion for SeedMask hardware. Sign on device; coordinate on Mac, Windows, or Linux." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">SM</div>
+      <div>
+        <h1>SeedMask Coordinator</h1>
+        <p class="tagline">Watch-only wallet companion · sign on SeedMask hardware</p>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h2>Download for your platform</h2>
+      <p>
+        Choose the installer for your operating system. Each build is self-contained
+        (Python backend, Node, and Kaspa WASM bundled). Your keys never leave SeedMask.
+      </p>
+      <p class="version" id="version-line">Version —</p>
+    </section>
+
+    <section class="downloads" aria-label="Platform downloads">
+      <article class="download-card" data-os="mac">
+        <h3>macOS</h3>
+        <p class="os-detail">Apple Silicon &amp; Intel · macOS 12+</p>
+        <a class="btn btn-primary" id="dl-mac" href="downloads/SeedMask-Coordinator-latest-mac.dmg">Download for Mac</a>
+        <a class="btn btn-ghost" id="dl-mac-zip" href="downloads/SeedMask-Coordinator-latest-mac.zip">ZIP alternative</a>
+      </article>
+
+      <article class="download-card" data-os="win">
+        <h3>Windows</h3>
+        <p class="os-detail">64-bit · Windows 10/11</p>
+        <a class="btn btn-primary" id="dl-win" href="downloads/SeedMask-Coordinator-latest-win.exe">Download for Windows</a>
+        <a class="btn btn-ghost" id="dl-win-zip" href="downloads/SeedMask-Coordinator-latest-win.zip">ZIP alternative</a>
+      </article>
+
+      <article class="download-card" data-os="linux">
+        <h3>Linux</h3>
+        <p class="os-detail">x64 · AppImage or .deb</p>
+        <a class="btn btn-primary" id="dl-linux" href="downloads/SeedMask-Coordinator-latest-linux.AppImage">Download AppImage</a>
+        <a class="btn btn-ghost" id="dl-linux-deb" href="downloads/SeedMask-Coordinator-latest-linux.deb">Download .deb</a>
+      </article>
+    </section>
+
+    <section class="notes">
+      <h2>Before you install</h2>
+      <ul>
+        <li>Export your watch-only key from SeedMask (Crypto → Export) before adding a wallet.</li>
+        <li>All signing happens on SeedMask hardware — this app never holds your seed.</li>
+        <li>Network settings (Bitcoin Core, Electrum, public APIs) are configurable in System settings.</li>
+      </ul>
+    </section>
+
+    <section class="notes">
+      <h2>Build from source</h2>
+      <pre><code>cd coordinator/electron
+npm install
+npm run release</code></pre>
+      <p class="muted">Run <code>npm run release</code> on each target OS to produce platform-native installers.</p>
+    </section>
+  </main>
+
+  <footer>
+    <p>SeedMask Coordinator · watch-only · open backend in <code>coordinator/app/</code></p>
+  </footer>
+
+  <script src="downloads/manifest.js"></script>
+  <script>
+    (function () {
+      var m = window.SEEDMASK_DOWNLOADS
+      if (!m) return
+      if (m.version) {
+        document.getElementById('version-line').textContent = 'Version ' + m.version + (m.stamp ? ' · ' + m.stamp : '')
+      }
+      var map = [
+        ['dl-mac', m.macDmg],
+        ['dl-mac-zip', m.macZip],
+        ['dl-win', m.winExe],
+        ['dl-win-zip', m.winZip],
+        ['dl-linux', m.linuxAppImage],
+        ['dl-linux-deb', m.linuxDeb],
+      ]
+      map.forEach(function (pair) {
+        var el = document.getElementById(pair[0])
+        if (el && pair[1]) el.href = 'downloads/' + pair[1]
+      })
+    })()
+  </script>
+</body>
+</html>

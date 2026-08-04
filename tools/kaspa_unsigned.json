@@ -1,0 +1,35 @@
+{
+  "version": 2,
+  "network": "mainnet",
+  "account": 0,
+  "tx_version": 0,
+  "lock_time": 0,
+  "gas": 0,
+  "subnetwork_id_hex": "0000000000000000000000000000000000000000",
+  "payload_hex": "",
+  "inputs": [
+    {
+      "prev_tx_id": "0000000000000000000000000000000000000000000000000000000000000001",
+      "prev_index": 0,
+      "sequence": 0,
+      "sig_op_count": 1,
+      "utxo_amount": 10000000,
+      "utxo_script_version": 0,
+      "utxo_script_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "sign_chain": 0,
+      "sign_address_index": 0
+    }
+  ],
+  "outputs": [
+    {
+      "value": 9000000,
+      "script_version": 0,
+      "script_hex": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "value": 1000000,
+      "script_version": 0,
+      "script_hex": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ]
+}
