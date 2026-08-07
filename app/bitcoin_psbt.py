@@ -464,11 +464,119 @@ def signed_psbt_bytes(signed: dict) -> bytes:
 
 
 def finalize_signed_psbt(raw: bytes) -> bytes:
-    psbt = PSBT.read_from(raw)
+    import io
+
+    psbt = PSBT.read_from(io.BytesIO(raw))
     tx = finalize_psbt(psbt, ignore_missing=False)
     if tx is None:
         raise ValueError("PSBT is not fully signed — scan all signature QR parts on SeedMask")
     return tx.serialize()
+
+
+def psbt_is_finalizable(raw: bytes) -> bool:
+    try:
+        finalize_signed_psbt(raw)
+        return True
+    except Exception:
+        return False
+
+
+def _multisig_threshold_from_script(script_obj) -> int | None:
+    if script_obj is None:
+        return None
+    data = getattr(script_obj, "data", None)
+    if data is None:
+        try:
+            data = bytes(script_obj)
+        except Exception:
+            return None
+    if not data:
+        return None
+    # BIP script: OP_m <pubs...> OP_n OP_CHECKMULTISIG — OP_1..OP_16 = 0x51..0x60
+    first = data[0]
+    if 0x51 <= first <= 0x60:
+        return first - 0x50
+    return None
+
+
+def psbt_signature_progress(raw: bytes) -> tuple[int, int]:
+    """Return (signatures_present, signatures_required) best-effort for multisig PSBTs."""
+    import io
+
+    psbt = PSBT.read_from(io.BytesIO(raw))
+    have = 0
+    need = 0
+    for inp in psbt.inputs:
+        n_sigs = len(inp.partial_sigs or {})
+        tap = getattr(inp, "taproot_sigs", None) or {}
+        n_sigs += len(tap)
+        if inp.final_scriptsig or inp.final_scriptwitness:
+            n_sigs = max(n_sigs, 1)
+        have = max(have, n_sigs)
+        for candidate in (inp.witness_script, inp.redeem_script):
+            m = _multisig_threshold_from_script(candidate)
+            if m:
+                need = max(need, m)
+                break
+    if need <= 0:
+        need = have if psbt_is_finalizable(raw) else max(have + 1, 1)
+    if psbt_is_finalizable(raw):
+        need = max(need, have)
+    return have, max(need, 1)
+
+
+def combine_psbts(base_raw: bytes, extra_raw: bytes) -> bytes:
+    """Merge partial signatures from extra into base (BIP-174 combine)."""
+    import io
+
+    base = PSBT.read_from(io.BytesIO(base_raw))
+    extra = PSBT.read_from(io.BytesIO(extra_raw))
+    if base.tx.serialize() != extra.tx.serialize():
+        raise ValueError(
+            "PSBT does not match this draft — load the same unsigned/partial transaction first"
+        )
+    if len(base.inputs) != len(extra.inputs) or len(base.outputs) != len(extra.outputs):
+        raise ValueError("PSBT input/output count does not match this draft")
+    for i, inp in enumerate(base.inputs):
+        inp.update(extra.inputs[i])
+    for i, out in enumerate(base.outputs):
+        out.update(extra.outputs[i])
+    return base.serialize()
+
+
+def summary_from_psbt(raw: bytes) -> dict[str, Any]:
+    """Best-effort review summary when an imported PSBT has no stored summary."""
+    import io
+
+    from embit.networks import NETWORKS
+
+    psbt = PSBT.read_from(io.BytesIO(raw))
+    tx = psbt.tx
+    total_out = sum(int(out.value) for out in tx.vout)
+    fee = None
+    try:
+        fee = int(psbt.fee())
+    except Exception:
+        fee = None
+    to_address = ""
+    try:
+        if tx.vout:
+            to_address = tx.vout[0].script_pubkey.address(NETWORKS["main"])
+    except Exception:
+        to_address = ""
+    send_sats = int(tx.vout[0].value) if tx.vout else 0
+    return {
+        "coin": "bitcoin",
+        "send_sats": send_sats,
+        "send_sompi": send_sats,
+        "send_btc": send_sats / SATS_PER_BTC,
+        "send_kas": send_sats / SATS_PER_BTC,
+        "fee_sats": fee,
+        "fee_sompi": fee,
+        "to_address": to_address,
+        "input_count": len(tx.vin),
+        "input_total_sompi": (total_out + fee) if fee is not None else None,
+    }
 
 
 async def broadcast_raw_tx(raw_tx: bytes) -> str:

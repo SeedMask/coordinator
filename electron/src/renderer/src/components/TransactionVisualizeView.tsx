@@ -553,9 +553,11 @@ function metadataTipForLabel(label: string): string | null {
     case 'RBF':
       return 'Replace-By-Fee: Enabled means the transaction can be fee-bumped while unconfirmed. Disabled means it is not marked for replacement.'
     case 'Confirmations':
-      return 'How many blocks have been mined on top of this transaction’s block. More confirmations means stronger settlement.'
+      return 'How many blocks have settled on top of this transaction. More confirmations means stronger settlement. On Kaspa this grows from the accepting block’s blue score.'
     case 'Block height':
       return 'The block number this transaction was included in.'
+    case 'Blue score':
+      return 'Blue score of the accepting chain block — Kaspa’s settlement milestone (similar to Bitcoin’s block height). Confirmations grow as the network tip advances past this value.'
     case 'Timestamp':
       return 'When this transaction was mined, in UTC.'
     default:

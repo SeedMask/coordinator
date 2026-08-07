@@ -106,6 +106,12 @@ export function walletResolvedAccount(wallet: WalletDTO): number {
 /** Stable key for Sparrow-style account family (one strip chip, many BIP44 accounts). */
 export function walletAccountGroupKey(wallet: WalletDTO): string {
   const chain = walletCoin(wallet)
+  // Encrypted wallets always keep their own strip chip (locked or unlocked).
+  // Grouping by fingerprint after unlock would merge them into another wallet's chip
+  // and hide Lock / the padlock on the wrong entry.
+  if (wallet.encrypted) {
+    return `id:${wallet.id}`
+  }
   const script = (wallet.script_type || '').trim().toLowerCase() || '_'
 
   // Singlesig: same master fingerprint + script = BIP44 account family.

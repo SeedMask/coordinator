@@ -79,6 +79,10 @@ export function WalletStrip({
   onSelect,
   onRename,
   onDelete,
+  onLock,
+  onUnlock,
+  onChangePassword,
+  onEncrypt,
   onReorder,
   onAdd,
   onSelectDraft,
@@ -97,6 +101,10 @@ export function WalletStrip({
   onSelect: (id: string) => void
   onRename: (id: string) => void
   onDelete: (id: string) => void
+  onLock?: (id: string) => void
+  onUnlock?: (id: string) => void
+  onChangePassword?: (id: string) => void
+  onEncrypt?: (id: string) => void
   onReorder: (ids: string[]) => void
   onAdd: () => void
   onSelectDraft?: () => void
@@ -414,6 +422,12 @@ export function WalletStrip({
               balanceHidden={balanceHidden}
               onRename={() => onRename(id)}
               onToggleBalance={() => toggleBalanceVisibility(id)}
+              onLock={onLock && wallet.encrypted ? () => onLock(id) : undefined}
+              onUnlock={onUnlock && wallet.encrypted && !wallet.unlocked ? () => onUnlock(id) : undefined}
+              onChangePassword={
+                onChangePassword && wallet.encrypted ? () => onChangePassword(id) : undefined
+              }
+              onEncrypt={onEncrypt && !wallet.encrypted ? () => onEncrypt(id) : undefined}
               onDelete={() => onDelete(id)}
               onSuppressSelect={suppressSelect}
               onPointerDown={(e) => {

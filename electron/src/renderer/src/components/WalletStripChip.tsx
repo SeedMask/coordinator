@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { WalletDTO } from '@renderer/api/types'
 import { WalletKeystoreGlyph } from '@renderer/components/BrandMarks'
+import { LockIcon } from '@renderer/components/icons'
 import { walletIsMultisig } from '@renderer/utils/walletHelpers'
 
 type MenuPos = { top: number; left: number }
@@ -75,6 +76,10 @@ export const WalletStripChipView = memo(function WalletStripChipView({
   balanceHidden,
   onRename,
   onToggleBalance,
+  onLock,
+  onUnlock,
+  onChangePassword,
+  onEncrypt,
   onDelete,
   onSuppressSelect,
   onPointerDown,
@@ -90,6 +95,14 @@ export const WalletStripChipView = memo(function WalletStripChipView({
   balanceHidden: boolean
   onRename: () => void
   onToggleBalance: () => void
+  /** Encrypted + unlocked → Lock this wallet. */
+  onLock?: () => void
+  /** Encrypted + locked → Unlock. */
+  onUnlock?: () => void
+  /** Encrypted → Change password. */
+  onChangePassword?: () => void
+  /** Not encrypted → Encrypt this wallet. */
+  onEncrypt?: () => void
   onDelete: () => void
   /** Cancel a pending single-click activate (used when opening the action menu). */
   onSuppressSelect?: () => void
@@ -97,8 +110,23 @@ export const WalletStripChipView = memo(function WalletStripChipView({
 }): React.JSX.Element {
   const label = displayLabel?.trim() || wallet.label || 'Wallet'
   const multisig = walletIsMultisig(wallet)
+  const locked = Boolean(wallet.encrypted && !wallet.unlocked)
   const titleExtra = accountIndex != null ? ` · Account ${accountIndex}` : ''
+  const lockNote = locked ? ' · Locked' : wallet.encrypted ? ' · Unlocked' : ''
   const [menuPos, setMenuPos] = useState<MenuPos | null>(null)
+  const canLock = Boolean(onLock && wallet.encrypted && wallet.unlocked)
+  const canUnlock = Boolean(onUnlock && locked)
+  const canChangePassword = Boolean(onChangePassword && wallet.encrypted)
+  const canEncrypt = Boolean(onEncrypt && !wallet.encrypted)
+  const menuItems = [
+    { label: 'Rename', onSelect: onRename },
+    { label: balanceHidden ? 'Show balance' : 'Hide balance', onSelect: onToggleBalance },
+    ...(canUnlock ? [{ label: 'Unlock', onSelect: onUnlock! }] : []),
+    ...(canLock ? [{ label: 'Lock this wallet', onSelect: onLock! }] : []),
+    ...(canEncrypt ? [{ label: 'Encrypt this wallet', onSelect: onEncrypt! }] : []),
+    ...(canChangePassword ? [{ label: 'Change password', onSelect: onChangePassword! }] : []),
+    { label: 'Delete', danger: true, onSelect: onDelete },
+  ]
 
   function openMenu(e: React.MouseEvent): void {
     e.preventDefault()
@@ -111,31 +139,32 @@ export const WalletStripChipView = memo(function WalletStripChipView({
     <>
       <button
         type="button"
-        className={`wallet-strip-chip${selected ? ' active' : ''}${dragging ? ' dragging' : ''}${menuPos ? ' menu-target' : ''}`}
+        className={`wallet-strip-chip${selected ? ' active' : ''}${dragging ? ' dragging' : ''}${menuPos ? ' menu-target' : ''}${locked ? ' locked' : ''}`}
         onContextMenu={openMenu}
         onDoubleClick={openMenu}
         onPointerDown={onPointerDown}
-        title={`${label}${titleExtra} — drag to reorder · double-click for options`}
+        title={`${label}${titleExtra}${lockNote} — drag to reorder · double-click for options`}
       >
         <WalletKeystoreGlyph keyCount={multisig ? 2 : 1} iconSize={24} />
         <span className={`wallet-strip-label${multisig ? ' multisig' : ''}${selected ? ' selected' : ''}`}>
           {label}
         </span>
+        {locked && (
+          <span className="wallet-strip-lock" aria-label="Locked">
+            <LockIcon size={12} />
+          </span>
+        )}
         {accountIndex != null && accountIndex > 0 && (
           <span className="wallet-strip-account-badge">#{accountIndex}</span>
         )}
-        {balance && <span className="wallet-strip-balance">{balance}</span>}
+        {balance && !locked && <span className="wallet-strip-balance">{balance}</span>}
         {scanning && <span className="wallet-strip-spinner" aria-label="Scanning" />}
       </button>
       {menuPos && (
         <ChipActionMenu
           pos={menuPos}
           onClose={() => setMenuPos(null)}
-          items={[
-            { label: 'Rename', onSelect: onRename },
-            { label: balanceHidden ? 'Show balance' : 'Hide balance', onSelect: onToggleBalance },
-            { label: 'Delete', danger: true, onSelect: onDelete },
-          ]}
+          items={menuItems}
         />
       )}
     </>

@@ -52,6 +52,7 @@ export function WalletSettingsView(): React.JSX.Element {
     activeWallet,
     loadWallets,
     activateWallet,
+    requestWalletUnlock,
     setSidebarSelection,
     setStatusMessage,
     applyLocalWalletLabel,
@@ -86,6 +87,8 @@ export function WalletSettingsView(): React.JSX.Element {
   const [exportQrSavePayload, setExportQrSavePayload] = useState<string | null>(null)
   const [exportQrSaveFilename, setExportQrSaveFilename] = useState<string | null>(null)
   const [exportQrSaveMime, setExportQrSaveMime] = useState<string | null>(null)
+  const [exportQrSaveLabel, setExportQrSaveLabel] = useState('Save file…')
+  const [exportQrSaveInfoTip, setExportQrSaveInfoTip] = useState<string | null>(null)
   const [exportQrShowInstructions, setExportQrShowInstructions] = useState(false)
   const [exportQrInstructionsOpen, setExportQrInstructionsOpen] = useState(false)
   const [exportQrReady, setExportQrReady] = useState<{ static: boolean; animated: boolean }>({
@@ -124,7 +127,7 @@ export function WalletSettingsView(): React.JSX.Element {
 
   useEffect(() => {
     void loadWalletDescriptor()
-  }, [activeWallet?.id, api])
+  }, [activeWallet?.id, activeWallet?.unlocked, api])
 
   function syncFromActiveWallet(): void {
     suppressAutoSave.current = true
@@ -161,6 +164,11 @@ export function WalletSettingsView(): React.JSX.Element {
       setDescriptorError(null)
       return
     }
+    if (activeWallet.encrypted && !activeWallet.unlocked) {
+      setWalletDescriptor('')
+      setDescriptorError(null)
+      return
+    }
     try {
       const res = await api.walletDescriptor(activeWallet.id)
       setWalletDescriptor(res.descriptor)
@@ -170,6 +178,12 @@ export function WalletSettingsView(): React.JSX.Element {
       setWalletDescriptor(fallback)
       setDescriptorError(fallback ? null : e instanceof Error ? e.message : 'Could not load descriptor')
     }
+  }
+
+  async function ensureActiveUnlocked(): Promise<boolean> {
+    if (!activeWallet) return false
+    if (!activeWallet.encrypted || activeWallet.unlocked) return true
+    return requestWalletUnlock(activeWallet.id, activeWallet)
   }
 
   useEffect(() => {
@@ -258,8 +272,9 @@ export function WalletSettingsView(): React.JSX.Element {
   }
 
   async function exportWallet(): Promise<void> {
-    setExportDestOpen(true)
     if (!activeWallet) return
+    if (!(await ensureActiveUnlocked())) return
+    setExportDestOpen(true)
     // Prefetch every destination so Dense + Animated are ready when picked.
     const wallet = activeWallet
     void Promise.all(
@@ -296,6 +311,8 @@ export function WalletSettingsView(): React.JSX.Element {
       savePayload?: string
       saveFilename?: string
       saveMime?: string
+      saveLabel?: string
+      saveInfoTip?: string
       showInstructions?: boolean
       /** Skip encode if packs already prepared. */
       prebuilt?: { static?: ExportQrPack; animated?: ExportQrPack }
@@ -313,6 +330,8 @@ export function WalletSettingsView(): React.JSX.Element {
     setExportQrSavePayload(opts?.savePayload ?? null)
     setExportQrSaveFilename(opts?.saveFilename ?? null)
     setExportQrSaveMime(opts?.saveMime ?? null)
+    setExportQrSaveLabel(opts?.saveLabel ?? 'Save file…')
+    setExportQrSaveInfoTip(opts?.saveInfoTip ?? null)
     setExportQrPreferredEncoding(preferredEncoding)
     setExportQrHint(opts?.hint ?? '')
     setExportQrShowInstructions(!!opts?.showInstructions)
@@ -579,6 +598,21 @@ export function WalletSettingsView(): React.JSX.Element {
   function watchOnlyExportDestinations(wallet: WalletDTO): WatchOnlyExportDest[] {
     const coin = walletCoin(wallet)
     const base = safeExportName()
+    const seedmaskDest: WatchOnlyExportDest = {
+      id: 'seedmask',
+      name: 'SeedMask',
+      detail: 'QR = compact SM|… for Add wallet scan. Save = wallet file for Import wallet',
+      encoding: 'plain',
+      density: 'static',
+      filename: `${base}-seedmask.txt`,
+      mime: 'text/plain',
+      hint:
+        'Scan the QR in Add wallet, or Save file for Add wallet → Import wallet (password-protected wallets stay sealed).',
+      build: seedMaskCompactExport,
+      // Actual Save body is the sealed wallet JSON (fetched in exportToDestination).
+      saveFilename: `${base}.seedmask.json`,
+      saveMime: 'application/json',
+    }
     if (coin === 'kaspa') {
       return [
         {
@@ -592,17 +626,7 @@ export function WalletSettingsView(): React.JSX.Element {
           hint: 'Point Kaspium at this QR. Payload is the bare kpub only.',
           build: (w) => w.kpub.trim(),
         },
-        {
-          id: 'seedmask',
-          name: 'SeedMask',
-          detail: 'SM|xfp|path|kpub — SeedMask Coordinator compact export',
-          encoding: 'plain',
-          density: 'static',
-          filename: `${base}-seedmask.txt`,
-          mime: 'text/plain',
-          hint: 'Scan in SeedMask Coordinator (Add wallet → Scan QR).',
-          build: seedMaskCompactExport,
-        },
+        seedmaskDest,
       ]
     }
     return [
@@ -644,17 +668,7 @@ export function WalletSettingsView(): React.JSX.Element {
         saveFilename: `${base}-electrum.json`,
         saveMime: 'application/json',
       },
-      {
-        id: 'seedmask',
-        name: 'SeedMask',
-        detail: 'SM|xfp|path|xpub — SeedMask Coordinator compact export',
-        encoding: 'plain',
-        density: 'static',
-        filename: `${base}-seedmask.txt`,
-        mime: 'text/plain',
-        hint: 'Scan in SeedMask Coordinator (Add wallet → Scan QR).',
-        build: seedMaskCompactExport,
-      },
+      seedmaskDest,
     ]
   }
 
@@ -665,7 +679,13 @@ export function WalletSettingsView(): React.JSX.Element {
     let savePayload: string | undefined
     try {
       payload = dest.build(activeWallet)
-      if (dest.buildSave) savePayload = dest.buildSave(activeWallet)
+      if (dest.id === 'seedmask') {
+        if (!api) throw new Error('Backend not ready')
+        const blob = await api.exportWallet(activeWallet.id)
+        savePayload = await blob.text()
+      } else if (dest.buildSave) {
+        savePayload = dest.buildSave(activeWallet)
+      }
     } catch (e) {
       setStatusMessage(e instanceof Error ? e.message : 'Export failed')
       return
@@ -692,6 +712,11 @@ export function WalletSettingsView(): React.JSX.Element {
       savePayload,
       saveFilename: dest.saveFilename,
       saveMime: dest.saveMime,
+      saveLabel: dest.id === 'seedmask' ? 'Save' : undefined,
+      saveInfoTip:
+        dest.id === 'seedmask'
+          ? 'Saves a SeedMask wallet file for Add wallet → Import wallet. If this wallet has a password, the file stays sealed — only SeedMask opens it with that password.'
+          : undefined,
       prebuilt: pre,
     })
   }
@@ -1023,7 +1048,7 @@ export function WalletSettingsView(): React.JSX.Element {
               <button type="button" className="btn btn-ghost" onClick={() => void exportWallet()}>
                 Export watch-only wallet
               </button>
-              <InfoTipButton text="Creates a QR so another app can import this watch-only wallet — SeedMask Coordinator, BlueWallet, Sparrow, Electrum, and similar. Each destination uses a different payload." />
+              <InfoTipButton text="QR or file for another app — BlueWallet, Sparrow, Electrum, or SeedMask. For SeedMask: scan the QR in Add wallet, or Save file for Import wallet (password stays sealed)." />
             </span>
           </div>
         </div>
@@ -1339,9 +1364,12 @@ export function WalletSettingsView(): React.JSX.Element {
               ) : (
                 <span />
               )}
-              <button type="button" className="btn btn-ghost" onClick={() => void saveExportQrPayload()}>
-                Save file…
-              </button>
+              <span className="wallet-settings-export-action">
+                <button type="button" className="btn btn-ghost" onClick={() => void saveExportQrPayload()}>
+                  {exportQrSaveLabel}
+                </button>
+                {exportQrSaveInfoTip && <InfoTipButton text={exportQrSaveInfoTip} />}
+              </span>
             </div>
           </div>
         </div>

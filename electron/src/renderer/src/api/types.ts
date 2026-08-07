@@ -40,6 +40,10 @@ export interface WalletDTO {
   descriptor?: string | null
   hardware?: string | null
   keystore_label?: string | null
+  encrypted?: boolean
+  unlocked?: boolean
+  /** Optional public reminder shown when unlocking; stored in plaintext. */
+  password_hint?: string | null
   cached_balance_sompi?: number
   cached_balance_kas?: number
   sync_status?: WalletSyncStatus
@@ -145,9 +149,13 @@ export interface DraftExportResponse {
   unsigned: unknown
   format?: string
   psbt_base64?: string
+  pskt?: Record<string, unknown>
   pskt_hex?: string
   pskb_hex?: string
   pskt_count?: number
+  signatures_loaded?: number
+  signatures_required?: number
+  signing_complete?: boolean
 }
 
 export interface TxVisualizeRow {
@@ -189,6 +197,8 @@ export interface TxVisualizeResponse {
   metadata?: TxVisualizeMetadataRow[]
   warnings?: TxVisualizeWarning[]
   block_time?: number | null
+  confirmations?: number | null
+  accepting_block_blue_score?: number | null
 }
 
 export interface AddressesResponse {
@@ -356,14 +366,22 @@ export interface BuildTxResponse {
   error?: string
   is_sweep?: boolean
   pskt_count?: number
+  message?: string
+  signatures_loaded?: number
+  signatures_required?: number
+  signing_complete?: boolean
+  ready?: Record<string, unknown>
+  signed?: Record<string, unknown>
 }
 
 export interface FinishResponse {
-  ok: boolean
+  ok?: boolean
   complete?: boolean
   message?: string
   signatures_loaded?: number
   signatures_required?: number
+  ready?: Record<string, unknown>
+  draft_id?: string
 }
 
 export interface BroadcastResponse {

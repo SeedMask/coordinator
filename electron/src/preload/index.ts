@@ -8,6 +8,9 @@ export interface SaveFileOptions {
 export interface OpenFileOptions {
   filters?: { name: string; extensions: string[] }[]
   multi?: boolean
+  title?: string
+  message?: string
+  defaultPath?: string
 }
 
 contextBridge.exposeInMainWorld('seedmask', {

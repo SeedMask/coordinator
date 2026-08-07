@@ -40,6 +40,7 @@ import { UserPrefs } from '@renderer/utils/userPrefs'
 import { emptySnapshot, loadPersistedSnapshots, persistSnapshotsToDisk, withoutBalances } from '@renderer/state/walletSnapshotStore'
 import type { WalletSnapshot } from '@renderer/api/types'
 import type { WalletStateResponse, WalletSyncStatus } from '@renderer/api/types'
+import { WalletPasswordModal } from '@renderer/components/WalletPasswordModal'
 
 function balanceResponseMatchesChain(bal: BalanceResponse, chain: CoinChain): boolean {
   const coin = (bal.coin || '').trim().toLowerCase()
@@ -152,6 +153,8 @@ interface AppContextValue {
   loadWallets: () => Promise<WalletDTO[]>
   reloadStatus: () => Promise<void>
   activateWallet: (id: string, hint?: WalletDTO) => Promise<void>
+  /** Prompt unlock if needed; resolves true when secrets are available. */
+  requestWalletUnlock: (id: string, hint?: WalletDTO) => Promise<boolean>
   refreshActiveWallet: () => Promise<void>
   refreshAfterSuccessfulSend: () => Promise<void>
   /** Insert a just-broadcast send at the top of the list immediately (before indexer catch-up). */
@@ -182,6 +185,12 @@ interface AppContextValue {
   setDraftWalletLabel: (s: string) => void
   renameWallet: (id: string, label: string) => Promise<void>
   applyLocalWalletLabel: (id: string, label: string) => void
+  /** Lock an encrypted wallet for this session (right-click strip menu). */
+  lockEncryptedWallet: (id: string) => Promise<void>
+  /** Open change-password modal for an encrypted wallet (strip menu). */
+  requestChangeWalletPassword: (id: string) => void
+  /** Open encrypt modal for an unencrypted wallet (strip menu). */
+  requestEncryptWallet: (id: string) => void
   beginAddWallet: () => void
   discoverWallet: (walletId: string, wait?: boolean) => Promise<void>
   syncStatusByWallet: Record<string, import('@renderer/api/types').WalletSyncStatus>
@@ -200,6 +209,27 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
   const [buildLabel] = useState(() => appBuildLabel())
   const [statusMessage, setStatusMessage] = useState('Starting…')
   const [wallets, setWallets] = useState<WalletDTO[]>([])
+  const [unlockTarget, setUnlockTarget] = useState<{
+    id: string
+    hint?: WalletDTO
+    resolve?: (ok: boolean) => void
+  } | null>(null)
+  const [unlockBusy, setUnlockBusy] = useState(false)
+  const [unlockError, setUnlockError] = useState<string | null>(null)
+  const [changePasswordTarget, setChangePasswordTarget] = useState<{
+    id: string
+    label?: string
+    passwordHint?: string
+  } | null>(null)
+  const [changePasswordBusy, setChangePasswordBusy] = useState(false)
+  const [changePasswordError, setChangePasswordError] = useState<string | null>(null)
+  const [changePasswordSuccess, setChangePasswordSuccess] = useState<string | null>(null)
+  const changePasswordDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [encryptTarget, setEncryptTarget] = useState<{ id: string; label?: string } | null>(null)
+  const [encryptBusy, setEncryptBusy] = useState(false)
+  const [encryptError, setEncryptError] = useState<string | null>(null)
+  const [encryptSuccess, setEncryptSuccess] = useState<string | null>(null)
+  const encryptDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [activeWalletId, setActiveWalletId] = useState<string | null>(null)
   const [activeWalletByCoin, setActiveWalletByCoin] = useState<Record<string, string>>({})
   const [walletBalances, setWalletBalances] = useState<Record<string, string>>({})
@@ -1101,6 +1131,7 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
   async function ensureAddresses(walletId: string): Promise<void> {
     if (!api) return
     const wallet = walletsRef.current.find((w) => w.id === walletId)
+    if (wallet?.encrypted && !wallet.unlocked) return
     const chain = wallet ? walletCoin(wallet) : 'kaspa'
     const cached = addressBooksRef.current[walletId]
     if (cached) {
@@ -1469,6 +1500,7 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     const activeId = activeWalletIdRef.current
     const activeChain = selectedChainRef.current
     for (const w of currentWallets) {
+      if (w.encrypted && !w.unlocked) continue
       const chain = walletCoin(w)
       const isActive = w.id === activeId && chain === activeChain
       const st = syncStatusByWalletRef.current[w.id] ?? w.sync_status ?? 'cached'
@@ -1560,10 +1592,12 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
       const wid = activeWalletIdRef.current
       if (wid) {
         const activeW = walletsList.find((w) => w.id === wid)
-        const chain = activeW ? walletCoin(activeW) : selectedChainRef.current
-        void loadWalletStateFromBackend(wid, true).then(() => {
-          void ensureAddresses(wid).then(() => mergeAddressBalancesForWallet(wid))
-        })
+        // Do not auto-prompt unlock on startup — only when the user selects a locked wallet.
+        if (!(activeW?.encrypted && !activeW.unlocked)) {
+          void loadWalletStateFromBackend(wid, true).then(() => {
+            void ensureAddresses(wid).then(() => mergeAddressBalancesForWallet(wid))
+          })
+        }
       }
       const chain = selectedChainRef.current
       const hasActiveWallet = Boolean(
@@ -1591,6 +1625,14 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
         wallets.find((x) => x.id === id) ??
         walletsRef.current.find((x) => x.id === id)
       if (!w) return
+      if (w.encrypted && !w.unlocked) {
+        setUnlockError(null)
+        setUnlockTarget((prev) => {
+          prev?.resolve?.(false)
+          return { id, hint: w }
+        })
+        return
+      }
       const chain = walletCoin(w)
       setIsAddingWallet(false)
       activeWalletByCoinRef.current = { ...activeWalletByCoinRef.current, [chain]: w.id }
@@ -1613,6 +1655,301 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
   const activateWallet = useCallback(async (id: string, hint?: WalletDTO) => {
     selectWallet(id, hint)
   }, [selectWallet])
+
+  const requestWalletUnlock = useCallback((id: string, hint?: WalletDTO): Promise<boolean> => {
+    const w =
+      hint ??
+      walletsRef.current.find((x) => x.id === id) ??
+      wallets.find((x) => x.id === id)
+    if (!w) return Promise.resolve(false)
+    if (!w.encrypted || w.unlocked) return Promise.resolve(true)
+    return new Promise((resolve) => {
+      setUnlockError(null)
+      setUnlockTarget((prev) => {
+        prev?.resolve?.(false)
+        return { id, hint: w, resolve }
+      })
+    })
+  }, [wallets])
+
+  const confirmUnlockWallet = useCallback(
+    async (password: string) => {
+      if (!api || !unlockTarget) return
+      setUnlockBusy(true)
+      setUnlockError(null)
+      const pending = unlockTarget
+      try {
+        const unlocked = await api.unlockWallet(pending.id, password)
+        await loadWallets()
+        // Keep encrypted/unlocked flags authoritative after unlock (list merge can race).
+        setWallets((prev) =>
+          prev.map((w) =>
+            w.id === pending.id
+              ? { ...w, ...unlocked, encrypted: true, unlocked: true }
+              : w,
+          ),
+        )
+        walletsRef.current = walletsRef.current.map((w) =>
+          w.id === pending.id ? { ...w, ...unlocked, encrypted: true, unlocked: true } : w,
+        )
+        const targetId = pending.id
+        setUnlockTarget(null)
+        pending.resolve?.(true)
+        // Bypass lock check with unlocked DTO.
+        const chain = walletCoin(unlocked)
+        setIsAddingWallet(false)
+        activeWalletByCoinRef.current = { ...activeWalletByCoinRef.current, [chain]: unlocked.id }
+        setActiveWalletByCoin((prev) => ({ ...prev, [chain]: unlocked.id }))
+        if (chain !== selectedChainRef.current) {
+          setSelectedChain(chain)
+        }
+        if (activeWalletId !== targetId) {
+          operationGenRef.current += 1
+          persistActiveSnapshot()
+          resetWalletNavigation()
+        }
+        applyLocalWallet(unlocked)
+        void api.activateWallet(targetId)
+        void requestBackgroundSync(targetId, 'discover', false)
+      } catch (e) {
+        setUnlockError(
+          e instanceof APIError ? apiError(e.status ?? 0, e.message) : e instanceof Error ? e.message : 'Unlock failed',
+        )
+      } finally {
+        setUnlockBusy(false)
+      }
+    },
+    [api, unlockTarget, loadWallets, activeWalletId, setSelectedChain],
+  )
+
+  const lockEncryptedWallet = useCallback(
+    async (id: string) => {
+      if (!api) return
+      const w = walletsRef.current.find((x) => x.id === id)
+      if (!w?.encrypted || !w.unlocked) return
+      try {
+        await api.lockWallet(id)
+        await loadWallets()
+        setWallets((prev) =>
+          prev.map((x) => (x.id === id ? { ...x, encrypted: true, unlocked: false, kpub: '' } : x)),
+        )
+        walletsRef.current = walletsRef.current.map((x) =>
+          x.id === id ? { ...x, encrypted: true, unlocked: false, kpub: '' } : x,
+        )
+        // Drop in-memory balances / txs / addresses so locked panes cannot flash them.
+        if (activeWalletIdRef.current === id) {
+          setBalanceKasValue(0)
+          setUtxos([])
+          setTransactions([])
+          setAddressBook(null)
+          setReceiveAddresses([])
+          const emptyKeys = new Set<string>()
+          selectedSpendUtxoKeysRef.current = emptyKeys
+          setSelectedSpendUtxoKeys(emptyKeys)
+          setShowReceiveSheet(false)
+          setShowSendWizard(false)
+        }
+        delete addressBooksRef.current[id]
+        setStatusMessage(`Locked “${w.label || 'wallet'}”`)
+      } catch (e) {
+        setStatusMessage(
+          e instanceof APIError ? apiError(e.status ?? 0, e.message) : e instanceof Error ? e.message : 'Lock failed',
+        )
+      }
+    },
+    [api, loadWallets],
+  )
+
+  const requestChangeWalletPassword = useCallback((id: string) => {
+    const w = walletsRef.current.find((x) => x.id === id) ?? wallets.find((x) => x.id === id)
+    if (!w?.encrypted) return
+    // Don't stack password modals.
+    setUnlockTarget((prev) => {
+      prev?.resolve?.(false)
+      return null
+    })
+    setUnlockError(null)
+    if (encryptDismissTimerRef.current) {
+      clearTimeout(encryptDismissTimerRef.current)
+      encryptDismissTimerRef.current = null
+    }
+    setEncryptTarget(null)
+    setEncryptError(null)
+    setEncryptSuccess(null)
+    if (changePasswordDismissTimerRef.current) {
+      clearTimeout(changePasswordDismissTimerRef.current)
+      changePasswordDismissTimerRef.current = null
+    }
+    setChangePasswordError(null)
+    setChangePasswordSuccess(null)
+    setChangePasswordTarget({
+      id,
+      label: w.label,
+      passwordHint: w.password_hint || '',
+    })
+  }, [wallets])
+
+  const dismissChangePasswordModal = useCallback(() => {
+    if (changePasswordDismissTimerRef.current) {
+      clearTimeout(changePasswordDismissTimerRef.current)
+      changePasswordDismissTimerRef.current = null
+    }
+    setChangePasswordTarget(null)
+    setChangePasswordError(null)
+    setChangePasswordSuccess(null)
+    setChangePasswordBusy(false)
+  }, [])
+
+  const requestEncryptWallet = useCallback((id: string) => {
+    const w = walletsRef.current.find((x) => x.id === id) ?? wallets.find((x) => x.id === id)
+    if (!w || w.encrypted) return
+    setUnlockTarget((prev) => {
+      prev?.resolve?.(false)
+      return null
+    })
+    setUnlockError(null)
+    if (changePasswordDismissTimerRef.current) {
+      clearTimeout(changePasswordDismissTimerRef.current)
+      changePasswordDismissTimerRef.current = null
+    }
+    setChangePasswordTarget(null)
+    setChangePasswordError(null)
+    setChangePasswordSuccess(null)
+    if (encryptDismissTimerRef.current) {
+      clearTimeout(encryptDismissTimerRef.current)
+      encryptDismissTimerRef.current = null
+    }
+    setEncryptError(null)
+    setEncryptSuccess(null)
+    setEncryptTarget({ id, label: w.label })
+  }, [wallets])
+
+  const dismissEncryptModal = useCallback(() => {
+    if (encryptDismissTimerRef.current) {
+      clearTimeout(encryptDismissTimerRef.current)
+      encryptDismissTimerRef.current = null
+    }
+    setEncryptTarget(null)
+    setEncryptError(null)
+    setEncryptSuccess(null)
+    setEncryptBusy(false)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (changePasswordDismissTimerRef.current) {
+        clearTimeout(changePasswordDismissTimerRef.current)
+      }
+      if (encryptDismissTimerRef.current) {
+        clearTimeout(encryptDismissTimerRef.current)
+      }
+    }
+  }, [])
+
+  const confirmChangeWalletPassword = useCallback(
+    async (currentPassword: string, newPassword?: string, hint?: string) => {
+      if (!api || !changePasswordTarget || changePasswordSuccess) return
+      setChangePasswordBusy(true)
+      setChangePasswordError(null)
+      const pendingId = changePasswordTarget.id
+      const before = walletsRef.current.find((x) => x.id === pendingId)
+      const wasLocked = Boolean(before?.encrypted && !before.unlocked)
+      try {
+        const updated = await api.changeWalletPassword(
+          pendingId,
+          currentPassword,
+          newPassword ?? '',
+          hint ?? '',
+        )
+        await loadWallets()
+        const encrypted = Boolean(updated.encrypted)
+        const unlocked = encrypted ? Boolean(updated.unlocked) : true
+        setWallets((prev) =>
+          prev.map((w) =>
+            w.id === pendingId ? { ...w, ...updated, encrypted, unlocked } : w,
+          ),
+        )
+        walletsRef.current = walletsRef.current.map((w) =>
+          w.id === pendingId ? { ...w, ...updated, encrypted, unlocked } : w,
+        )
+        if (activeWalletIdRef.current === pendingId && unlocked && wasLocked) {
+          applyLocalWallet(updated)
+          void api.activateWallet(pendingId)
+          void requestBackgroundSync(pendingId, 'discover', false)
+        }
+        const successMsg = encrypted ? 'Password successfully changed' : 'Encryption removed'
+        setChangePasswordBusy(false)
+        setChangePasswordSuccess(successMsg)
+        setStatusMessage(
+          encrypted
+            ? `Password updated for “${updated.label || 'wallet'}”`
+            : `Removed encryption for “${updated.label || 'wallet'}”`,
+        )
+        if (changePasswordDismissTimerRef.current) {
+          clearTimeout(changePasswordDismissTimerRef.current)
+        }
+        changePasswordDismissTimerRef.current = setTimeout(() => {
+          changePasswordDismissTimerRef.current = null
+          setChangePasswordTarget(null)
+          setChangePasswordSuccess(null)
+        }, 1400)
+      } catch (e) {
+        setChangePasswordError(
+          e instanceof APIError
+            ? apiError(e.status ?? 0, e.message)
+            : e instanceof Error
+              ? e.message
+              : 'Change password failed',
+        )
+        setChangePasswordBusy(false)
+      }
+    },
+    [api, changePasswordTarget, changePasswordSuccess, loadWallets],
+  )
+
+  const confirmEncryptWallet = useCallback(
+    async (password: string, _newPassword?: string, hint?: string) => {
+      if (!api || !encryptTarget || encryptSuccess) return
+      setEncryptBusy(true)
+      setEncryptError(null)
+      const pendingId = encryptTarget.id
+      try {
+        const updated = await api.encryptWallet(pendingId, password, hint ?? '')
+        await loadWallets()
+        setWallets((prev) =>
+          prev.map((w) =>
+            w.id === pendingId
+              ? { ...w, ...updated, encrypted: true, unlocked: true }
+              : w,
+          ),
+        )
+        walletsRef.current = walletsRef.current.map((w) =>
+          w.id === pendingId ? { ...w, ...updated, encrypted: true, unlocked: true } : w,
+        )
+        setEncryptBusy(false)
+        setEncryptSuccess('Wallet successfully encrypted')
+        setStatusMessage(`Encrypted “${updated.label || 'wallet'}”`)
+        if (encryptDismissTimerRef.current) {
+          clearTimeout(encryptDismissTimerRef.current)
+        }
+        encryptDismissTimerRef.current = setTimeout(() => {
+          encryptDismissTimerRef.current = null
+          setEncryptTarget(null)
+          setEncryptSuccess(null)
+        }, 1400)
+      } catch (e) {
+        setEncryptError(
+          e instanceof APIError
+            ? apiError(e.status ?? 0, e.message)
+            : e instanceof Error
+              ? e.message
+              : 'Encrypt failed',
+        )
+        setEncryptBusy(false)
+      }
+    },
+    [api, encryptTarget, encryptSuccess, loadWallets],
+  )
 
   const refreshFiatPrices = useCallback(async () => {
     await fiatPriceService.refresh()
@@ -1665,10 +2002,12 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     if (forceFullRescan) invalidateMainnetSync()
     updateScanStatusMessage()
     await Promise.all(
-      list.map((wallet) => {
-        const mode: WalletSyncMode = forceFullRescan ? 'deep' : 'hot'
-        return requestBackgroundSync(wallet.id, mode, false)
-      }),
+      list
+        .filter((wallet) => !(wallet.encrypted && !wallet.unlocked))
+        .map((wallet) => {
+          const mode: WalletSyncMode = forceFullRescan ? 'deep' : 'hot'
+          return requestBackgroundSync(wallet.id, mode, false)
+        }),
     )
     updateScanStatusMessage()
   }, [updateScanStatusMessage])
@@ -2327,6 +2666,7 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     loadWallets,
     reloadStatus,
     activateWallet,
+    requestWalletUnlock,
     refreshActiveWallet,
     discoverWallet,
     refreshAllWallets,
@@ -2350,12 +2690,83 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     setDraftWalletLabel,
     renameWallet,
     applyLocalWalletLabel,
+    lockEncryptedWallet,
+    requestChangeWalletPassword,
+    requestEncryptWallet,
     beginAddWallet,
     syncStatusByWallet,
     activeSyncStatus,
   }
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>
+  return (
+    <AppContext.Provider value={value}>
+      {children}
+      {unlockTarget && (
+        <WalletPasswordModal
+          mode="unlock"
+          walletLabel={
+            unlockTarget.hint?.label ||
+            wallets.find((w) => w.id === unlockTarget.id)?.label ||
+            undefined
+          }
+          passwordHint={
+            unlockTarget.hint?.password_hint ||
+            wallets.find((w) => w.id === unlockTarget.id)?.password_hint ||
+            undefined
+          }
+          busy={unlockBusy}
+          error={unlockError}
+          onCancel={() => {
+            if (unlockBusy) return
+            unlockTarget.resolve?.(false)
+            setUnlockTarget(null)
+            setUnlockError(null)
+          }}
+          onConfirm={(password) => void confirmUnlockWallet(password)}
+        />
+      )}
+      {changePasswordTarget && !unlockTarget && !encryptTarget && (
+        <WalletPasswordModal
+          mode="change"
+          walletLabel={
+            changePasswordTarget.label ||
+            wallets.find((w) => w.id === changePasswordTarget.id)?.label ||
+            undefined
+          }
+          passwordHint={changePasswordTarget.passwordHint}
+          busy={changePasswordBusy}
+          error={changePasswordError}
+          successMessage={changePasswordSuccess}
+          onCancel={() => {
+            if (changePasswordBusy) return
+            dismissChangePasswordModal()
+          }}
+          onConfirm={(password, newPassword, hint) =>
+            void confirmChangeWalletPassword(password, newPassword, hint)
+          }
+        />
+      )}
+      {encryptTarget && !unlockTarget && !changePasswordTarget && (
+        <WalletPasswordModal
+          mode="encrypt"
+          encryptExisting
+          walletLabel={
+            encryptTarget.label ||
+            wallets.find((w) => w.id === encryptTarget.id)?.label ||
+            undefined
+          }
+          busy={encryptBusy}
+          error={encryptError}
+          successMessage={encryptSuccess}
+          onCancel={() => {
+            if (encryptBusy) return
+            dismissEncryptModal()
+          }}
+          onConfirm={(password, _newPassword, hint) => void confirmEncryptWallet(password, undefined, hint)}
+        />
+      )}
+    </AppContext.Provider>
+  )
 }
 
 export function useApp(): AppContextValue {

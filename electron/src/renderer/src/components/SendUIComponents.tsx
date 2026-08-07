@@ -75,6 +75,149 @@ export function SeedMaskFiatField({
   )
 }
 
+export function RecipientSelfMenu({
+  ownAddresses,
+  otherWallets,
+  onSelectAddress,
+  resolveWalletAddress,
+}: {
+  ownAddresses: Array<{ index: number; address: string }>
+  otherWallets: Array<{ id: string; name: string }>
+  onSelectAddress: (address: string) => void
+  resolveWalletAddress: (walletId: string) => Promise<string>
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [pane, setPane] = useState<'root' | 'this' | 'wallets'>('root')
+  const [loadingWalletId, setLoadingWalletId] = useState<string | null>(null)
+  const [resolveError, setResolveError] = useState<string | null>(null)
+
+  function resetMenu(): void {
+    setPane('root')
+    setResolveError(null)
+    setLoadingWalletId(null)
+  }
+
+  async function pickWallet(walletId: string): Promise<void> {
+    setResolveError(null)
+    setLoadingWalletId(walletId)
+    try {
+      const address = (await resolveWalletAddress(walletId)).trim()
+      if (!address) {
+        setResolveError('Could not find a receive address for that wallet')
+        return
+      }
+      onSelectAddress(address)
+      setOpen(false)
+      resetMenu()
+    } catch (e) {
+      setResolveError(e instanceof Error ? e.message : 'Could not load wallet address')
+    } finally {
+      setLoadingWalletId(null)
+    }
+  }
+
+  const showThisWallet = ownAddresses.length > 0
+  const showMyWallets = otherWallets.length > 0
+
+  return (
+    <details
+      className="receive-address-menu"
+      open={open}
+      onToggle={(e) => {
+        const nextOpen = e.currentTarget.open
+        setOpen(nextOpen)
+        if (!nextOpen) resetMenu()
+      }}
+    >
+      <summary className="receive-address-menu-summary">
+        <span>Send to my address or wallet</span>
+        <span className="receive-address-menu-chevron" aria-hidden />
+      </summary>
+      <div className="receive-address-menu-body">
+        {pane === 'root' && (
+          <div className="receive-address-menu-section">
+            <div className="receive-address-menu-list">
+              {showThisWallet && (
+                <button type="button" className="receive-address-menu-nav" onClick={() => setPane('this')}>
+                  <span className="receive-address-menu-item-label">This wallet</span>
+                  <span className="receive-address-menu-item-addr">
+                    {ownAddresses.length} receive address{ownAddresses.length === 1 ? '' : 'es'}
+                  </span>
+                  <span className="receive-address-menu-nav-chevron" aria-hidden />
+                </button>
+              )}
+              {showMyWallets && (
+                <button type="button" className="receive-address-menu-nav" onClick={() => setPane('wallets')}>
+                  <span className="receive-address-menu-item-label">My wallets</span>
+                  <span className="receive-address-menu-item-addr">
+                    {otherWallets.length} wallet{otherWallets.length === 1 ? '' : 's'}
+                  </span>
+                  <span className="receive-address-menu-nav-chevron" aria-hidden />
+                </button>
+              )}
+              {!showThisWallet && !showMyWallets && (
+                <p className="muted receive-address-menu-empty">No saved addresses yet</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {pane === 'this' && (
+          <div className="receive-address-menu-section">
+            <button type="button" className="receive-address-menu-back" onClick={() => setPane('root')}>
+              <span className="receive-address-menu-back-chevron" aria-hidden />
+              This wallet
+            </button>
+            <div className="receive-address-menu-list">
+              {ownAddresses.slice(0, 8).map((a) => (
+                <button
+                  key={a.address}
+                  type="button"
+                  onClick={() => {
+                    onSelectAddress(a.address)
+                    setOpen(false)
+                    resetMenu()
+                  }}
+                >
+                  <span className="receive-address-menu-item-label">Receive #{a.index}</span>
+                  <span className="receive-address-menu-item-addr">{a.address}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {pane === 'wallets' && (
+          <div className="receive-address-menu-section">
+            <button type="button" className="receive-address-menu-back" onClick={() => setPane('root')}>
+              <span className="receive-address-menu-back-chevron" aria-hidden />
+              My wallets
+            </button>
+            <div className="receive-address-menu-list">
+              {otherWallets.map((w) => (
+                <button
+                  key={w.id}
+                  type="button"
+                  disabled={loadingWalletId === w.id}
+                  onClick={() => void pickWallet(w.id)}
+                >
+                  <span className="receive-address-menu-item-label">{w.name}</span>
+                  <span className="receive-address-menu-item-addr">
+                    {loadingWalletId === w.id ? 'Loading address…' : 'Use receive address'}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {resolveError && <p className="receive-address-menu-error">{resolveError}</p>}
+      </div>
+    </details>
+  )
+}
+
+/** @deprecated Prefer RecipientSelfMenu */
 export function ReceiveAddressMenu({
   choices,
   onSelect,
@@ -82,30 +225,13 @@ export function ReceiveAddressMenu({
   choices: Array<{ index: number; address: string }>
   onSelect: (address: string) => void
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-
   return (
-    <details
-      className="receive-address-menu"
-      open={open}
-      onToggle={(e) => setOpen(e.currentTarget.open)}
-    >
-      <summary>Use my receive address</summary>
-      <div className="receive-address-menu-list">
-        {choices.slice(0, 8).map((a) => (
-          <button
-            key={a.address}
-            type="button"
-            onClick={() => {
-              onSelect(a.address)
-              setOpen(false)
-            }}
-          >
-            #{a.index} {a.address}
-          </button>
-        ))}
-      </div>
-    </details>
+    <RecipientSelfMenu
+      ownAddresses={choices}
+      otherWallets={[]}
+      onSelectAddress={onSelect}
+      resolveWalletAddress={async () => ''}
+    />
   )
 }
 

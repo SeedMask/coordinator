@@ -5,8 +5,8 @@
   "description": "SeedMask Coordinator - cross-platform desktop (watch-only)",
   "main": "./out/main/index.js",
   "author": "SeedMask",
-  "license": "MIT",
-  "private": false,
+  "license": "UNLICENSED",
+  "private": true,
   "scripts": {
     "sync:icon": "bash scripts/sync_app_icon.sh",
     "predev": "bash scripts/sync_app_icon.sh",

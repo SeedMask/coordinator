@@ -32,9 +32,15 @@ export async function pickPathWithDialog(opts: {
 
 export async function openFileWithDialog(
   filters: { name: string; extensions: string[] }[],
+  opts?: { title?: string; message?: string; defaultPath?: string },
 ): Promise<ArrayBuffer | null> {
   if (window.seedmask?.openFile) {
-    const picked = await window.seedmask.openFile({ filters })
+    const picked = await window.seedmask.openFile({
+      filters,
+      title: opts?.title,
+      message: opts?.message,
+      defaultPath: opts?.defaultPath,
+    })
     if (!picked || Array.isArray(picked)) return null
     return window.seedmask.readFile(picked)
   }

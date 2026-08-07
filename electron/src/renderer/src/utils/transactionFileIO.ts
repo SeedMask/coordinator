@@ -1,6 +1,6 @@
 import { isBitcoinSignedPsbt, isSignedKaspaTransaction } from '@renderer/utils/buildSummary'
 
-export type KaspaTransactionKind = 'unsigned' | 'signed' | 'unknown'
+export type KaspaTransactionKind = 'unsigned' | 'signed' | 'partial' | 'unknown'
 
 export const PSBT_MAGIC = new Uint8Array([0x70, 0x73, 0x62, 0x74, 0xff])
 
@@ -27,6 +27,18 @@ export function kaspaTransactionKind(data: Uint8Array): KaspaTransactionKind {
       ) {
         return 'signed'
       }
+      // Handoff draft with partialSigs inside PSKT
+      const pskt = (root.pskt as Record<string, unknown> | undefined) ?? undefined
+      if (pskt && Array.isArray(pskt.inputs)) {
+        const hasPartial = pskt.inputs.some((inp) => {
+          if (!inp || typeof inp !== 'object') return false
+          const partial = (inp as Record<string, unknown>).partialSigs
+          return partial != null && typeof partial === 'object' && Object.keys(partial as object).length > 0
+        })
+        if (hasPartial) return 'partial'
+      }
+      const loaded = Number(root.signatures_loaded ?? 0)
+      if (loaded > 0) return 'partial'
       return 'unsigned'
     }
   } catch {
@@ -68,9 +80,22 @@ export function exportDeviceV2(forUnsigned: Record<string, unknown>): Uint8Array
   return new TextEncoder().encode(JSON.stringify(sortObjectKeys(v2)))
 }
 
+/** Coordinator handoff file: keeps PSKT partialSigs for the next cosigner. */
+export function exportKaspaHandoffDraft(envelope: Record<string, unknown>): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(envelope, null, 2))
+}
+
+/**
+ * Prepare JSON for /api/tx/import.
+ * Keep draft envelopes intact (do not strip `pskt` / partials).
+ */
 export function unwrapUnsignedImport(parsed: unknown): unknown {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return parsed
   const dict = parsed as Record<string, unknown>
+  const format = String(dict.format ?? '')
+  if (format === 'seedpass_pskt_draft_v1' || format === 'seedpass_psbt_draft_v1') return dict
+  if (dict.pskt != null || (typeof dict.pskt_hex === 'string' && dict.pskt_hex.trim())) return dict
+  if (typeof dict.psbt_base64 === 'string' && dict.psbt_base64.trim()) return dict
   if (dict.inputs == null && dict.unsigned != null) return dict.unsigned
   return parsed
 }

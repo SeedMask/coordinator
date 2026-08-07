@@ -11,6 +11,7 @@ import {
   KaspaImportHistoryPrompt,
   type KaspaImportHistoryChoice,
 } from '@renderer/components/KaspaImportHistoryPrompt'
+import { WalletPasswordModal } from '@renderer/components/WalletPasswordModal'
 import { useApp } from '@renderer/state/AppProvider'
 import { APIError } from '@renderer/api/client'
 import { extractKeyForCoin, importKeyValidationError, parseExtendedKeyMetadata } from '@renderer/utils/extendedKey'
@@ -67,6 +68,18 @@ export function AddAccountSheet({
   const [label, setLabel] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [encryptPromptOpen, setEncryptPromptOpen] = useState(false)
+  const [encryptError, setEncryptError] = useState<string | null>(null)
+  const [pendingCreate, setPendingCreate] = useState<{
+    kpub: string
+    label: string
+    derivation: string
+    fingerprint?: string
+    scriptType?: string
+    policyType?: string
+    account: number
+    hardware?: string
+  } | null>(null)
   const [showScanner, setShowScanner] = useState(false)
   const [historyPromptWallet, setHistoryPromptWallet] = useState<WalletDTO | null>(null)
   const [historyPromptBusy, setHistoryPromptBusy] = useState(false)
@@ -142,30 +155,60 @@ export function AddAccountSheet({
       opts.hardware ??
       (seedMaskOnly ? 'seedmask' : usbHardwareOnly ? sourceWallet.hardware || undefined : undefined)
 
-    const wallet = await api.createWallet({
-      kpub: extractKeyForCoin(chain, opts.kpub),
-      label: opts.label.trim() || defaultLabel(opts.account),
-      scan_limit: sourceWallet.scan_limit ?? 30,
-      coin: chain,
+    setPendingCreate({
+      kpub: opts.kpub,
+      label: opts.label,
       derivation: opts.derivation,
       fingerprint: fp || expectedFp || undefined,
-      script_type: opts.scriptType ?? sourceWallet.script_type ?? (chain === 'kaspa' ? (multisig ? 'p2sh' : 'p2pk') : btcScript),
-      policy_type: opts.policyType ?? sourceWallet.policy_type ?? (multisig ? 'multisig' : 'singlesig'),
-      multisig_m: multisig ? (sourceWallet.multisig_m ?? undefined) : undefined,
-      multisig_n: multisig ? (sourceWallet.multisig_n ?? undefined) : undefined,
+      scriptType: opts.scriptType,
+      policyType: opts.policyType,
       account: opts.account,
       hardware,
-      activate: true,
     })
-    await loadWallets()
-    await activateWallet(wallet.id, wallet)
-    setStatusMessage(`Account ${opts.account} added`)
-    if (chain === 'kaspa' && needsKaspaImportHistoryPrompt(networkSettings)) {
-      setHistoryPromptWallet(wallet)
-      return
+    setEncryptError(null)
+    setEncryptPromptOpen(true)
+  }
+
+  async function confirmCreateSibling(password: string, _newPassword?: string, hint?: string): Promise<void> {
+    if (!api || !pendingCreate) return
+    setEncryptError(null)
+    setBusy(true)
+    try {
+      const opts = pendingCreate
+      const passwordHint = password.trim() ? (hint || '').trim() || undefined : undefined
+      const wallet = await api.createWallet({
+        kpub: extractKeyForCoin(chain, opts.kpub),
+        label: opts.label.trim() || defaultLabel(opts.account),
+        scan_limit: sourceWallet.scan_limit ?? 30,
+        coin: chain,
+        derivation: opts.derivation,
+        fingerprint: opts.fingerprint,
+        script_type: opts.scriptType ?? sourceWallet.script_type ?? (chain === 'kaspa' ? (multisig ? 'p2sh' : 'p2pk') : btcScript),
+        policy_type: opts.policyType ?? sourceWallet.policy_type ?? (multisig ? 'multisig' : 'singlesig'),
+        multisig_m: multisig ? (sourceWallet.multisig_m ?? undefined) : undefined,
+        multisig_n: multisig ? (sourceWallet.multisig_n ?? undefined) : undefined,
+        account: opts.account,
+        hardware: opts.hardware,
+        activate: true,
+        password: password.trim() || undefined,
+        password_hint: passwordHint,
+      })
+      setEncryptPromptOpen(false)
+      setPendingCreate(null)
+      await loadWallets()
+      await activateWallet(wallet.id, wallet)
+      setStatusMessage(`Account ${opts.account} added`)
+      if (chain === 'kaspa' && needsKaspaImportHistoryPrompt(networkSettings)) {
+        setHistoryPromptWallet(wallet)
+        return
+      }
+      void discoverWallet(wallet.id)
+      onCreated(wallet)
+    } catch (e) {
+      setEncryptError(e instanceof Error ? e.message : 'Failed to add account')
+    } finally {
+      setBusy(false)
     }
-    void discoverWallet(wallet.id)
-    onCreated(wallet)
   }
 
   async function resolveHistoryPrompt(choice: KaspaImportHistoryChoice): Promise<void> {
@@ -356,6 +399,21 @@ export function AddAccountSheet({
             }}
           />
         )}
+        {encryptPromptOpen && (
+          <WalletPasswordModal
+            mode="encrypt"
+            walletLabel={pendingCreate?.label || label || undefined}
+            busy={busy}
+            error={encryptError}
+            onCancel={() => {
+              if (busy) return
+              setEncryptPromptOpen(false)
+              setPendingCreate(null)
+              setEncryptError(null)
+            }}
+            onConfirm={(password, _newPassword, hint) => void confirmCreateSibling(password, undefined, hint)}
+          />
+        )}
         {error && (
           <div className="modal-backdrop" role="presentation" onClick={() => setError(null)}>
             <div className="modal-card elevated-card" role="dialog" onClick={(e) => e.stopPropagation()}>
@@ -369,7 +427,7 @@ export function AddAccountSheet({
             </div>
           </div>
         )}
-        {busy && (
+        {busy && !encryptPromptOpen && (
           <div className="modal-backdrop" role="status" aria-live="polite">
             <div className="modal-card elevated-card">
               <p>Importing Account {accountIndex}…</p>

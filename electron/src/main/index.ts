@@ -2,6 +2,8 @@
 const { app, BrowserWindow, ipcMain, shell, dialog, nativeImage, session, clipboard } =
   require('electron') as typeof import('electron')
 import { join } from 'path'
+import { homedir } from 'os'
+import { existsSync, mkdirSync, renameSync, cpSync } from 'fs'
 import { readFile, writeFile } from 'fs/promises'
 import { BackendManager } from './backend-manager'
 import {
@@ -34,6 +36,63 @@ import { APP_NAME, resolveAppIconPath, isTranslocatedMacApp } from './paths'
 import { buildExportQrPacks } from './ur-qr'
 
 type BrowserWindowInstance = InstanceType<typeof BrowserWindow>
+
+/** App wallet data dir — same as Python ~/.seedmask-coordinator. */
+function seedmaskDataDir(): string {
+  return join(homedir(), '.seedmask-coordinator')
+}
+
+function seedmaskVisibleDataDir(): string {
+  return join(homedir(), 'SeedMask Coordinator')
+}
+
+function seedmaskWalletsDir(): string {
+  return join(seedmaskDataDir(), 'wallets')
+}
+
+/** Undo the brief visible-folder experiment if needed. */
+function migrateVisibleDataDirBack(): void {
+  const hidden = seedmaskDataDir()
+  const visible = seedmaskVisibleDataDir()
+  if (existsSync(hidden) || !existsSync(visible)) return
+  try {
+    renameSync(visible, hidden)
+  } catch {
+    try {
+      cpSync(visible, hidden, { recursive: true })
+    } catch {
+      /* leave visible copy; dialogs use hidden path once created */
+    }
+  }
+}
+
+/** Prefer wallets/; fall back to the data root. Always an absolute path. */
+function seedmaskImportExportDir(): string {
+  migrateVisibleDataDirBack()
+  const data = seedmaskDataDir()
+  const wallets = seedmaskWalletsDir()
+  try {
+    if (!existsSync(data)) mkdirSync(data, { recursive: true })
+    if (!existsSync(wallets)) mkdirSync(wallets, { recursive: true })
+    return wallets
+  } catch {
+    return data
+  }
+}
+
+/**
+ * Default dialog location for SeedMask wallet files.
+ * Opens inside ~/.seedmask-coordinator/wallets; dialogs also set showHiddenFiles
+ * (Sparrow-style) so the hidden parent stays visible if the user navigates up.
+ */
+function resolveSeedmaskDialogPath(defaultPath?: string): string {
+  if (defaultPath && (defaultPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(defaultPath))) {
+    return defaultPath
+  }
+  const base = seedmaskImportExportDir()
+  if (!defaultPath) return base
+  return join(base, defaultPath)
+}
 
 function isPackagedApp(): boolean {
   if (typeof process.resourcesPath === 'string' && process.resourcesPath.length > 0) return true
@@ -207,8 +266,10 @@ function registerIpc(): void {
       const win = BrowserWindow.getFocusedWindow() ?? mainWindow
       if (!win) return null
       const res = await dialog.showSaveDialog(win, {
-        defaultPath: opts.defaultPath,
+        defaultPath: resolveSeedmaskDialogPath(opts.defaultPath),
         filters: opts.filters,
+        // Like Sparrow: keep ~/.seedmask-coordinator visible if the user navigates up.
+        properties: ['showHiddenFiles', 'createDirectory'],
       })
       return res.canceled ? null : res.filePath
     },
@@ -216,11 +277,28 @@ function registerIpc(): void {
 
   ipcMain.handle(
     'dialog:open-file',
-    async (_e, opts: { filters?: { name: string; extensions: string[] }[]; multi?: boolean }) => {
+    async (
+      _e,
+      opts: {
+        filters?: { name: string; extensions: string[] }[]
+        multi?: boolean
+        title?: string
+        message?: string
+        defaultPath?: string
+      },
+    ) => {
       const win = BrowserWindow.getFocusedWindow() ?? mainWindow
       if (!win) return null
+      const props: Array<
+        'openFile' | 'multiSelections' | 'showHiddenFiles'
+      > = opts.multi ? ['openFile', 'multiSelections', 'showHiddenFiles'] : ['openFile', 'showHiddenFiles']
       const res = await dialog.showOpenDialog(win, {
-        properties: opts.multi ? ['openFile', 'multiSelections'] : ['openFile'],
+        title: opts.title,
+        message: opts.message,
+        defaultPath: resolveSeedmaskDialogPath(opts.defaultPath),
+        // Like Sparrow Open/Import wallet: show dotfolders so ~/.seedmask-coordinator
+        // stays findable after navigating away from wallets/.
+        properties: props,
         filters: opts.filters,
       })
       if (res.canceled || !res.filePaths.length) return null

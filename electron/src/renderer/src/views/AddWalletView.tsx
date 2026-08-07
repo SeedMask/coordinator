@@ -20,6 +20,7 @@ import {
   KaspaImportHistoryPrompt,
   type KaspaImportHistoryChoice,
 } from '@renderer/components/KaspaImportHistoryPrompt'
+import { WalletPasswordModal } from '@renderer/components/WalletPasswordModal'
 import { useApp } from '@renderer/state/AppProvider'
 import {
   type BitcoinMultisigQuorum,
@@ -47,6 +48,7 @@ import {
   importKeyValidationError,
   parseExtendedKeyMetadata,
 } from '@renderer/utils/extendedKey'
+import { openFileWithDialog } from '@renderer/utils/nativeFiles'
 import { apiError } from '@renderer/utils/userErrors'
 import { needsKaspaImportHistoryPrompt } from '@renderer/utils/networkSettings'
 
@@ -85,6 +87,15 @@ export function AddWalletView({
   const [scanLimit, setScanLimit] = useState(30)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [encryptPromptOpen, setEncryptPromptOpen] = useState(false)
+  const [importBusy, setImportBusy] = useState(false)
+  const [pendingImport, setPendingImport] = useState<{
+    payload: Record<string, unknown>
+    label: string
+    hint: string
+  } | null>(null)
+  const [importPasswordError, setImportPasswordError] = useState<string | null>(null)
+  const [encryptError, setEncryptError] = useState<string | null>(null)
   const [showScanner, setShowScanner] = useState(false)
   const [walletMeta, setWalletMeta] = useState<ExtendedKeyMetadata | null>(null)
   const [capturedFingerprint, setCapturedFingerprint] = useState<string | null>(null)
@@ -1057,16 +1068,8 @@ export function AddWalletView({
         setErrorMessage('Enter a valid output descriptor')
         return
       }
-      setBusy(true)
-      try {
-        const label = walletName.trim() || 'Imported wallet'
-        const wallet = await api.createWalletFromDescriptor(descriptorText, label, scanLimit, true)
-        await finishImportedWallet(wallet)
-      } catch (e) {
-        setErrorMessage(formatError(e))
-      } finally {
-        setBusy(false)
-      }
+      setEncryptError(null)
+      setEncryptPromptOpen(true)
       return
     }
 
@@ -1098,8 +1101,31 @@ export function AddWalletView({
       }
     }
 
+    setEncryptError(null)
+    setEncryptPromptOpen(true)
+  }
+
+  async function confirmAddWallet(password: string, _newPassword?: string, hint?: string): Promise<void> {
+    if (!api) return
+    setEncryptError(null)
     setBusy(true)
     try {
+      const passwordHint = password.trim() ? (hint || '').trim() || undefined : undefined
+      if (hasValidDescriptor) {
+        const label = walletName.trim() || 'Imported wallet'
+        const wallet = await api.createWalletFromDescriptor(
+          descriptorText,
+          label,
+          scanLimit,
+          true,
+          password.trim() || undefined,
+          passwordHint,
+        )
+        setEncryptPromptOpen(false)
+        await finishImportedWallet(wallet)
+        return
+      }
+
       const primaryKey = isMultisigImport
         ? extractKeyForCoin(selectedChain, multisigCosigners[0]?.xpub ?? '')
         : extractKeyForCoin(selectedChain, kpubRaw)
@@ -1124,10 +1150,13 @@ export function AddWalletView({
           ? undefined
           : singlesigKeystore.label.trim() || undefined,
         activate: true,
+        password: password.trim() || undefined,
+        password_hint: passwordHint,
       })
+      setEncryptPromptOpen(false)
       await finishImportedWallet(wallet)
     } catch (e) {
-      setErrorMessage(formatError(e))
+      setEncryptError(formatError(e))
     } finally {
       setBusy(false)
     }
@@ -1258,7 +1287,6 @@ export function AddWalletView({
     setKpubRaw(payload.kpub)
     if (payload.verifiedReceiveIndex != null && payload.verifiedReceiveIndex + 1 > scanLimit) {
       setScanLimit(Math.min(200, payload.verifiedReceiveIndex + 5))
-      setShowAdvanced(true)
     }
     if (!walletName.trim() || walletName.trim() === draftWalletLabel) {
       setWalletName(payload.label || brandLabel)
@@ -1282,6 +1310,103 @@ export function AddWalletView({
     setHardwareSourceTracked('seedmask')
     setScanCosignerIndex(isMultisigImport ? selectedCosignerIndex : null)
     setShowScanner(true)
+  }
+
+  function walletPayloadFromImport(data: Record<string, unknown>): Record<string, unknown> | null {
+    const nested = data.wallet
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      return nested as Record<string, unknown>
+    }
+    const list = data.wallets
+    if (Array.isArray(list) && list[0] && typeof list[0] === 'object') {
+      return list[0] as Record<string, unknown>
+    }
+    if (data.encrypted_blob || data.kpub || data.id) return data
+    return null
+  }
+
+  function importLooksSealed(wallet: Record<string, unknown>): boolean {
+    return Boolean(wallet.encrypted) || (wallet.encrypted_blob != null && typeof wallet.encrypted_blob === 'object')
+  }
+
+  async function finishImportWallet(
+    payload: Record<string, unknown>,
+    password?: string,
+  ): Promise<void> {
+    if (!api) return
+    setImportBusy(true)
+    setImportPasswordError(null)
+    try {
+      const res = await api.importWallet(payload, {
+        activate: true,
+        password: password?.trim() || undefined,
+      })
+      const imported = res.wallet
+      await loadWallets()
+      if (imported?.id) {
+        await activateWallet(imported.id, imported)
+      }
+      setPendingImport(null)
+      setStatusMessage(`Imported “${imported?.label || 'wallet'}”`)
+      setIsAddingWallet(false)
+      onDone()
+    } catch (e) {
+      const msg = formatError(e)
+      if (pendingImport) {
+        setImportPasswordError(msg)
+      } else {
+        setErrorMessage(msg)
+        setStatusMessage(msg)
+      }
+    } finally {
+      setImportBusy(false)
+    }
+  }
+
+  async function beginImportWallet(): Promise<void> {
+    if (busy || importBusy) return
+    setErrorMessage(null)
+    setImportPasswordError(null)
+    const buf = await openFileWithDialog(
+      [
+        { name: 'SeedMask wallet', extensions: ['json', 'seedmask'] },
+        { name: 'JSON', extensions: ['json'] },
+      ],
+      {
+        title: 'Import SeedMask wallet',
+        message: 'Choose a wallet file from ~/.seedmask-coordinator',
+      },
+    )
+    if (!buf) return
+    let data: Record<string, unknown>
+    try {
+      const text = new TextDecoder().decode(buf)
+      const parsed: unknown = JSON.parse(text)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('Export must be a JSON object')
+      }
+      data = parsed as Record<string, unknown>
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Invalid wallet file'
+      setErrorMessage(msg)
+      setStatusMessage(msg)
+      return
+    }
+    const wallet = walletPayloadFromImport(data)
+    if (!wallet) {
+      setErrorMessage('Not a SeedMask wallet file')
+      setStatusMessage('Not a SeedMask wallet file')
+      return
+    }
+    if (importLooksSealed(wallet)) {
+      setPendingImport({
+        payload: data,
+        label: String(wallet.label || 'Imported wallet'),
+        hint: String(wallet.password_hint || ''),
+      })
+      return
+    }
+    await finishImportWallet(data)
   }
 
   const mainForm = (
@@ -1308,6 +1433,14 @@ export function AddWalletView({
             <p className="muted add-wallet-subtitle">{subtitle}</p>
           </div>
         </div>
+        <button
+          type="button"
+          className="btn btn-ghost add-wallet-import-btn"
+          disabled={busy || importBusy}
+          onClick={() => void beginImportWallet()}
+        >
+          Import wallet
+        </button>
         {selectedChain === 'bitcoin' && (
           <div className="descriptor-inline-field">
             <div className="descriptor-label-row">
@@ -1443,6 +1576,37 @@ export function AddWalletView({
         <KaspaImportHistoryPrompt
           onChoosePublic={() => void resolveHistoryPrompt('public')}
           onChoosePrivate={() => void resolveHistoryPrompt('private')}
+        />
+      )}
+
+      {encryptPromptOpen && (
+        <WalletPasswordModal
+          mode="encrypt"
+          walletLabel={walletName.trim() || undefined}
+          busy={busy}
+          error={encryptError}
+          onCancel={() => {
+            if (busy) return
+            setEncryptPromptOpen(false)
+            setEncryptError(null)
+          }}
+          onConfirm={(password, _newPassword, hint) => void confirmAddWallet(password, undefined, hint)}
+        />
+      )}
+
+      {pendingImport && (
+        <WalletPasswordModal
+          mode="unlock"
+          walletLabel={pendingImport.label}
+          passwordHint={pendingImport.hint || null}
+          busy={importBusy}
+          error={importPasswordError}
+          onCancel={() => {
+            if (importBusy) return
+            setPendingImport(null)
+            setImportPasswordError(null)
+          }}
+          onConfirm={(password) => void finishImportWallet(pendingImport.payload, password)}
         />
       )}
 

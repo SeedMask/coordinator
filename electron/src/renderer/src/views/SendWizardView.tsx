@@ -10,7 +10,7 @@ import { SignedQRScanner } from '@renderer/components/SignedQRScanner'
 import { EmptyStateView } from '@renderer/components/EmptyStateView'
 import {
   CoinGroupPicker,
-  ReceiveAddressMenu,
+  RecipientSelfMenu,
   reviewCoinsSidebarSubtitle,
   reviewFeeTitle,
   SeedMaskFiatField,
@@ -22,6 +22,11 @@ import { InfoTipButton } from '@renderer/components/settings/SettingsChrome'
 import { TransactionVisualizeView } from '@renderer/components/TransactionVisualizeView'
 import { fiatPriceService } from '@renderer/services/fiatPriceService'
 import { isKaspaHighFee, kaspaHighFeeReason } from '@renderer/utils/feeWarnings'
+import {
+  walletAccountGroupKey,
+  walletFamilyLabel,
+  walletsSharingAccountGroup,
+} from '@renderer/utils/walletHelpers'
 import {
   coinDisplayUnit,
   formatCoinUnitsLabel,
@@ -76,6 +81,7 @@ import { readFromClipboard } from '@renderer/utils/clipboard'
 import { saveFileWithDialog } from '@renderer/utils/nativeFiles'
 import {
   exportDeviceV2,
+  exportKaspaHandoffDraft,
   isPsbtBinary,
   kaspaTransactionKind,
   signedJSONString,
@@ -118,6 +124,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
     api,
     activeWallet,
     activeWalletId,
+    wallets,
     selectedChain,
     bitcoinDisplayUnit,
     utxos,
@@ -221,6 +228,8 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
   const networkFeeSompiRef = useRef(networkFeeSompi)
   const apiMaxSendSompiRef = useRef<number | null>(null)
   const reviewBuildStartedRef = useRef(0)
+  const skipReviewAutoBuildRef = useRef(false)
+  const suppressDraftInvalidationRef = useRef(false)
   const explicitDenseQrRef = useRef(false)
   const selectedChainRef = useRef(selectedChain)
   const amountEditSourceRef = useRef<AmountEditSource>(null)
@@ -240,6 +249,10 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
       draftInvalidationReadyRef.current = true
       return
     }
+    // Only invalidate while editing on Send. Never wipe an imported/built Review QR
+    // just because fee state synced from the loaded draft.
+    if (step !== STEP_SEND) return
+    if (suppressDraftInvalidationRef.current) return
     if (!draftIdRef.current) return
     setDraftId('')
     setQrFrames([])
@@ -249,7 +262,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
     setSignatureProgressCount(0)
     setSignedValidationMessage(null)
     setStatusMessage('Transaction changed — rebuild the signing QR')
-  }, [toAddress, sendKAS, feeMode, customFeeKAS, networkFeeSompi, selectedChain, activeWalletId, setStatusMessage])
+  }, [toAddress, sendKAS, feeMode, customFeeKAS, networkFeeSompi, selectedChain, activeWalletId, step, setStatusMessage])
 
   const sendChain = activeWallet ? walletCoin(activeWallet) : selectedChain
   const isBitcoinSend = sendChain === 'bitcoin'
@@ -301,6 +314,26 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
     }
     return receiveAddresses
   }, [addressBook, receiveAddresses])
+
+  const otherSameChainWallets = useMemo(() => {
+    const sameChain = wallets.filter((w) => walletCoin(w) === sendChain)
+    const active = sameChain.find((w) => w.id === activeWalletId)
+    const activeGroupKey = active ? walletAccountGroupKey(active) : null
+    const seen = new Set<string>()
+    const out: Array<{ id: string; name: string }> = []
+    for (const wallet of sameChain) {
+      const groupKey = walletAccountGroupKey(wallet)
+      if (activeGroupKey && groupKey === activeGroupKey) continue
+      if (seen.has(groupKey)) continue
+      seen.add(groupKey)
+      const group = walletsSharingAccountGroup(sameChain, wallet)
+      out.push({
+        id: wallet.id,
+        name: walletFamilyLabel(wallet, group),
+      })
+    }
+    return out
+  }, [wallets, sendChain, activeWalletId])
 
   const effectiveFeeSompi = useMemo((): number | null => {
     if (feeMode === 'network') return networkFeeSompi
@@ -1096,10 +1129,6 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
   const applyBuildResponse = useCallback(
     (res: import('@renderer/api/types').BuildTxResponse, density: QRDisplayDensity) => {
       setDraftId(res.draft_id)
-      setSignedJSON('')
-      setSignedBroadcastReady(false)
-      setSignatureProgressCount(0)
-      setSignedValidationMessage(null)
       setLedgerUnsigned(res.unsigned ?? null)
       const built = summaryFromResponse(res.summary)
       if (built && (!built.usedUtxoKeys?.length)) {
@@ -1126,29 +1155,54 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
       setQrModulesPerFrame(res.qr_modules_per_frame ?? null)
       const frames = decodeQrImages(res)
       setQrFrames(frames)
-      if (frames.length === 0) {
-        setBuildError('Backend returned no QR image data')
-      } else if (actualDensity === 'static' && (res.qr_fountain || frames.length > 1)) {
-        setBuildError('Static mode failed — backend returned multipart. Restart the coordinator backend and try again.')
-      } else if (actualDensity === 'animated' && frames.length <= 1 && !res.qr_fountain) {
+
+      const sigLoaded = Math.max(0, Number(res.signatures_loaded ?? 0))
+      const sigRequired = Math.max(0, Number(res.signatures_required ?? 0))
+      const signingComplete = Boolean(res.signing_complete)
+
+      if (signingComplete) {
+        setSignedBroadcastReady(true)
+        setSignatureProgressCount(sigRequired > 0 ? sigRequired : Math.max(1, sigLoaded))
+        const ready = (res.ready ?? res.signed) as Record<string, unknown> | undefined
+        if (ready && typeof ready === 'object') {
+          setSignedJSON(JSON.stringify(ready))
+        }
+        setSignedValidationMessage(res.message || 'Fully signed — ready to broadcast')
         setBuildError(null)
+        setStatusMessage(res.message || 'Fully signed transaction loaded — tap Broadcast when ready')
       } else {
-        setBuildError(null)
+        setSignedBroadcastReady(false)
+        setSignedJSON('')
+        setSignatureProgressCount(sigLoaded)
+        setSignedValidationMessage(
+          sigLoaded > 0
+            ? res.message || `Partial signatures loaded (${sigLoaded}/${sigRequired || '?'}). Sign next cosigner on SeedMask.`
+            : null,
+        )
+        if (frames.length === 0) {
+          setBuildError('Backend returned no QR image data')
+        } else if (actualDensity === 'static' && (res.qr_fountain || frames.length > 1)) {
+          setBuildError('Static mode failed — backend returned multipart. Restart the coordinator backend and try again.')
+        } else {
+          setBuildError(null)
+        }
+        const isStaticQr = actualDensity === 'static' && frames.length === 1 && !res.qr_fountain
+        setQrAutoPlaying(actualDensity === 'animated' && frames.length > 1)
+        const hw = (activeWallet?.hardware || '').trim().toLowerCase()
+        const usbHw = hw === 'ledger' || hw === 'onekey'
+        const usbLabel = hw === 'onekey' ? 'OneKey' : 'Ledger'
+        setStatusMessage(
+          res.message
+            ? res.message
+            : usbHw
+              ? `Transaction ready — sign with ${usbLabel}`
+              : isStaticQr
+                ? 'Dense QR ready — tap for full screen, then scan on SeedMask'
+                : frames.length > 1
+                  ? 'Animated QR ready — scan on SeedMask'
+                  : 'QR ready — scan on SeedMask',
+        )
       }
-      const isStaticQr = actualDensity === 'static' && frames.length === 1 && !res.qr_fountain
-      setQrAutoPlaying(actualDensity === 'animated' && frames.length > 1)
-      const hw = (activeWallet?.hardware || '').trim().toLowerCase()
-      const usbHw = hw === 'ledger' || hw === 'onekey'
-      const usbLabel = hw === 'onekey' ? 'OneKey' : 'Ledger'
-      setStatusMessage(
-        usbHw
-          ? `Transaction ready — sign with ${usbLabel}`
-          : isStaticQr
-            ? 'Dense QR ready — tap for full screen, then scan on SeedMask'
-            : frames.length > 1
-              ? 'Animated QR ready — scan on SeedMask'
-              : 'QR ready — scan on SeedMask',
-      )
       if (res.draft_id) {
         try {
           localStorage.setItem(LAST_DRAFT_ID_KEY, res.draft_id)
@@ -1289,7 +1343,18 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
         setSignedValidationMessage('Signed transaction matches — ready to broadcast')
         setBuildError(null)
         setStatusMessage('Signed transaction verified — tap Broadcast')
-        if (signedJSON !== trimmed) setSignedJSON(trimmed)
+        const ready = res.ready
+        if (ready && typeof ready === 'object') {
+          if (typeof ready.psbt_base64 === 'string' && ready.psbt_base64.trim()) {
+            setSignedJSON(JSON.stringify({ format: 'bitcoin_psbt', psbt_base64: ready.psbt_base64 }))
+          } else if (Array.isArray(ready.inputs)) {
+            setSignedJSON(JSON.stringify(ready))
+          } else if (signedJSON !== trimmed) {
+            setSignedJSON(trimmed)
+          }
+        } else if (signedJSON !== trimmed) {
+          setSignedJSON(trimmed)
+        }
       } catch (e) {
         if (signedJSON !== trimmed) setSignedJSON(trimmed)
         setSignedBroadcastReady(false)
@@ -1618,10 +1683,19 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
       if (densityFlashGeneration.current === gen) setDensityLabelFlash(null)
     }, 1500)
     if (step === STEP_REVIEW && buildSummary && !busy) {
+      // Loaded handoff drafts often have empty Send form fields — don't rebuild from form.
+      if (!toAddressRef.current.trim() || !sendKASRef.current.trim()) {
+        setStatusMessage(
+          newValue === 'static'
+            ? 'Dense QR mode selected — rebuild from Send if frames look wrong'
+            : 'Animated QR mode selected — rebuild from Send if frames look wrong',
+        )
+        return
+      }
       reviewBuildStartedRef.current = 0
       void buildTransaction(newValue)
     }
-  }, [qrDensity, step, buildSummary, busy, buildTransaction])
+  }, [qrDensity, step, buildSummary, busy, buildTransaction, setStatusMessage])
 
   const resetFlow = useCallback(() => {
     setStep(STEP_SEND)
@@ -1652,17 +1726,31 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
       setStatusMessage('Build or load a transaction first')
       return
     }
+    const sigNeedFromWallet =
+      (activeWallet?.multisig_m ?? 0) > 0 ? Math.max(1, activeWallet?.multisig_m ?? 1) : 1
     try {
       const exportRes = await api.draftExport(draftId, activeWalletId)
       if (isBitcoinSend) {
         const b64 = exportRes.psbt_base64?.trim()
         if (!b64) {
-          setStatusMessage('Could not read unsigned PSBT — rebuild the transaction')
+          setStatusMessage('Could not read PSBT — rebuild the transaction')
           return
         }
         const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
-        const saved = await saveFileWithDialog(bytes, 'btc_unsigned.psbt', 'application/octet-stream')
-        setStatusMessage(saved ? 'Unsigned PSBT saved' : 'Save cancelled')
+        const saved = await saveFileWithDialog(bytes, 'btc-tx.psbt', 'application/octet-stream')
+        const sigLoaded = Math.max(
+          signatureProgressCount,
+          Number(exportRes.signatures_loaded ?? 0),
+        )
+        const sigNeed = Math.max(sigNeedFromWallet, Number(exportRes.signatures_required ?? 0), 1)
+        const partial = sigLoaded > 0 && sigLoaded < sigNeed && !exportRes.signing_complete
+        setStatusMessage(
+          saved
+            ? partial
+              ? `Partial PSBT saved (${sigLoaded}/${sigNeed})`
+              : 'PSBT saved'
+            : 'Save cancelled',
+        )
         return
       }
       const unsigned = exportRes.unsigned as Record<string, unknown>
@@ -1673,6 +1761,45 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
         setStatusMessage('Cannot save — rebuild tx (wallet kpub missing)')
         return
       }
+      // Prefer full draft envelope so the next cosigner can Load transaction with partials.
+      if (exportRes.pskt_hex || exportRes.pskt || exportRes.format === 'seedpass_pskt_draft_v1') {
+        const sigLoaded = Math.max(
+          signatureProgressCount,
+          Number(exportRes.signatures_loaded ?? 0),
+        )
+        const sigNeed = Math.max(sigNeedFromWallet, Number(exportRes.signatures_required ?? 0), 1)
+        const envelope: Record<string, unknown> = {
+          format: 'seedpass_pskt_draft_v1',
+          unsigned,
+          pskt: exportRes.pskt,
+          pskt_hex: exportRes.pskt_hex,
+          pskb_hex: exportRes.pskb_hex,
+          pskt_count: exportRes.pskt_count,
+          signatures_loaded: sigLoaded,
+          signatures_required: sigNeed,
+          draft_id: draftId,
+        }
+        if (buildSummary) {
+          envelope.summary = {
+            to_address: buildSummary.toAddress,
+            send_kas: buildSummary.sendKas,
+            fee_sompi: buildSummary.feeSompi,
+            from_address: buildSummary.fromAddress,
+            input_count: buildSummary.inputCount,
+          }
+        }
+        const data = exportKaspaHandoffDraft(envelope)
+        const saved = await saveFileWithDialog(data, 'seedmask-tx.json', 'application/json')
+        const partial = sigLoaded > 0 && sigLoaded < sigNeed
+        setStatusMessage(
+          saved
+            ? partial
+              ? `Partial transaction saved (${sigLoaded}/${sigNeed})`
+              : 'Transaction saved'
+            : 'Save cancelled',
+        )
+        return
+      }
       const data = exportDeviceV2(unsigned)
       const saved = await saveFileWithDialog(data, 'seedmask-unsigned-tx.json', 'application/json')
       setStatusMessage(saved ? 'Transaction saved' : 'Save cancelled')
@@ -1681,26 +1808,55 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
       setBuildError(msg)
       setStatusMessage(msg)
     }
-  }, [api, draftId, activeWalletId, isBitcoinSend, activeWallet, setStatusMessage])
+  }, [
+    api,
+    draftId,
+    activeWalletId,
+    isBitcoinSend,
+    activeWallet,
+    setStatusMessage,
+    signatureProgressCount,
+    buildSummary,
+  ])
 
   const loadTransactionDraftFromFile = useCallback(
     async (file: File) => {
       if (!api) return
       const buf = await file.arrayBuffer()
       const bytes = new Uint8Array(buf)
-      if (!isPsbtBinary(bytes) && kaspaTransactionKind(bytes) === 'signed') {
-        setStatusMessage('That file is already signed — use Load signed transaction…')
-        return
-      }
       setBusy(true)
       setBuildError(null)
       try {
-        setStatusMessage('Loading transaction…')
+        const kind = isPsbtBinary(bytes) ? 'psbt' : kaspaTransactionKind(bytes)
+        setStatusMessage(
+          kind === 'signed'
+            ? 'Loading signed transaction…'
+            : kind === 'partial'
+              ? 'Loading partial transaction…'
+              : 'Loading transaction…',
+        )
+        // Prevent Review auto-rebuild + draft-invalidation from wiping imported QR.
+        skipReviewAutoBuildRef.current = true
+        suppressDraftInvalidationRef.current = true
+        if (reviewBuildKey === 0) {
+          setReviewBuildKey(1)
+          reviewBuildStartedRef.current = 1
+        } else {
+          reviewBuildStartedRef.current = reviewBuildKey
+        }
         const res = await api.importTxFile(buf, qrDensity)
         applyBuildResponse(res, qrDensity)
         setStep(STEP_REVIEW)
-        setStatusMessage('Transaction loaded — sign on SeedMask, then load the signed transaction')
+        // Keep suppression until after fee/summary state commits.
+        window.setTimeout(() => {
+          suppressDraftInvalidationRef.current = false
+        }, 500)
+        if (!res.signing_complete && !res.message) {
+          setStatusMessage('Transaction loaded — sign on SeedMask, then load the signed transaction')
+        }
       } catch (e) {
+        skipReviewAutoBuildRef.current = false
+        suppressDraftInvalidationRef.current = false
         const msg = e instanceof Error ? e.message : 'Load failed'
         setBuildError(msg)
         setStatusMessage(msg)
@@ -1708,7 +1864,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
         setBusy(false)
       }
     },
-    [api, qrDensity, applyBuildResponse, setStatusMessage],
+    [api, qrDensity, applyBuildResponse, setStatusMessage, reviewBuildKey],
   )
 
   const loadSignedTransactionFromFile = useCallback(
@@ -1864,6 +2020,11 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
   // Swift reviewStep `.task`: build once when review appears (always animated for Kaspa).
   useEffect(() => {
     if (step !== STEP_REVIEW || reviewBuildKey === 0) return
+    if (skipReviewAutoBuildRef.current) {
+      skipReviewAutoBuildRef.current = false
+      reviewBuildStartedRef.current = reviewBuildKey
+      return
+    }
     if (reviewBuildStartedRef.current === reviewBuildKey) return
     if (broadcastTxid || broadcastTxids.length > 0) return
     reviewBuildStartedRef.current = reviewBuildKey
@@ -1896,21 +2057,12 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
     ? requiredSignatureCount
     : Math.min(requiredSignatureCount, Math.max(0, signatureProgressCount))
 
-  const reviewFooterTitle = busy
-    ? 'Building…'
-    : signedBroadcastReady
-      ? 'Broadcast'
-      : !draftId
-        ? 'Build or load transaction'
-        : !signedJSON.trim()
-          ? 'Load signed transaction'
-          : 'Broadcast'
-
-  const reviewFooterEnabled = !busy && draftId.length > 0 && (signedBroadcastReady || signedJSON.trim().length > 0)
-
+  const reviewFooterTitle = busy ? 'Building…' : 'Broadcast'
+  // Only light up after a fully verified / fully signed payload — never for partial or invalid loads.
+  const reviewFooterEnabled = !busy && signedBroadcastReady
   const reviewFooterAction = async (): Promise<void> => {
-    if (!signedBroadcastReady && signedJSON.trim()) await applySignedPayload(signedJSON)
-    if (signedBroadcastReady) await broadcast()
+    if (!signedBroadcastReady) return
+    await broadcast()
   }
 
   const sidebarCoins = reviewInputUtxos.length > 0
@@ -2097,19 +2249,34 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
             <QRViewfinderIcon />
           </button>
         </div>
-        {payeeReceiveChoices.length > 0 && (
-          <ReceiveAddressMenu
-            choices={payeeReceiveChoices}
-            onSelect={(address) => {
+        {(payeeReceiveChoices.length > 0 || otherSameChainWallets.length > 0) && (
+          <RecipientSelfMenu
+            ownAddresses={payeeReceiveChoices}
+            otherWallets={otherSameChainWallets}
+            onSelectAddress={(address) => {
               setToAddress(address)
               setAddressError(null)
+            }}
+            resolveWalletAddress={async (walletId) => {
+              if (!api) return ''
+              try {
+                const book = await api.addressBook(walletId, false)
+                const next = (book.next_receive_address || '').trim()
+                if (next) return next
+                const first = book.receive?.[0]?.address?.trim()
+                if (first) return first
+              } catch {
+                /* fall through */
+              }
+              const addrs = (await api.addresses(walletId)).addresses
+              return (addrs[0]?.address || '').trim()
             }}
           />
         )}
         <p className="muted send-address-hint">
           {isBitcoinSend
-            ? 'Paste a Bitcoin mainnet address (native segwit bc1… recommended).'
-            : 'Paste the full kaspa:… string (~67 characters). Use the menu above to test with your own address.'}
+            ? 'Paste a Bitcoin mainnet address, or choose one of your wallets above.'
+            : 'Paste a full kaspa:… address, or choose one of your wallets above.'}
         </p>
         {addressError && <p style={{ color: 'var(--danger)' }}>{addressError}</p>}
 
@@ -2269,9 +2436,17 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
 
         {amountPlusFeeError && <p style={{ color: 'var(--danger)', fontSize: 13 }}>{amountPlusFeeError}</p>}
 
-        <details style={{ marginTop: 16 }} open={showAdvancedFees} onToggle={(e) => setShowAdvancedFees(e.currentTarget.open)}>
-          <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Advanced options</summary>
-          <div style={{ marginTop: 12 }}>
+        <details
+          className="send-disclosure"
+          style={{ marginTop: 16 }}
+          open={showAdvancedFees}
+          onToggle={(e) => setShowAdvancedFees(e.currentTarget.open)}
+        >
+          <summary className="send-disclosure-summary">
+            <span>Advanced options</span>
+            <span className="send-disclosure-chevron" aria-hidden />
+          </summary>
+          <div className="send-disclosure-body">
             {!isBitcoinSend && kaspaMassDetailLine && (
               <div className="send-kaspa-mass-card">
                 <strong>Transaction mass & KIP-9</strong>
@@ -2279,47 +2454,53 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
               </div>
             )}
             <details
+              className="send-disclosure send-disclosure-nested"
               open={showAdvancedCoinControl}
               onToggle={(e) => {
                 setShowAdvancedCoinControl(e.currentTarget.open)
               }}
             >
-              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Choose coins to spend</summary>
-              <CoinGroupPicker
-                groups={spendableAddressGroups}
-                selectedKeys={selectedSpendUtxoKeys}
-                chain={selectedChain}
-                onSelectAll={() => {
-                  setSendUsesCustomCoinSelection(false)
-                  selectAllSpendableUtxos()
-                  void loadNetworkFee()
-                }}
-                onClear={() => {
-                  setSendUsesCustomCoinSelection(true)
-                  clearSpendSelection()
-                }}
-                onToggleGroup={(group) => {
-                  setSendUsesCustomCoinSelection(true)
-                  const fullySelected = group.keys.every((k) => selectedSpendUtxoKeys.has(k))
-                  if (fullySelected) group.keys.forEach((k) => toggleSpendUtxo(k))
-                  else group.keys.forEach((k) => {
-                    if (!selectedSpendUtxoKeys.has(k)) toggleSpendUtxo(k)
-                  })
-                  void loadNetworkFee()
-                }}
-              />
+              <summary className="send-disclosure-summary">
+                <span>Choose coins to spend</span>
+                <span className="send-disclosure-chevron" aria-hidden />
+              </summary>
+              <div className="send-disclosure-body">
+                <CoinGroupPicker
+                  groups={spendableAddressGroups}
+                  selectedKeys={selectedSpendUtxoKeys}
+                  chain={selectedChain}
+                  onSelectAll={() => {
+                    setSendUsesCustomCoinSelection(false)
+                    selectAllSpendableUtxos()
+                    void loadNetworkFee()
+                  }}
+                  onClear={() => {
+                    setSendUsesCustomCoinSelection(true)
+                    clearSpendSelection()
+                  }}
+                  onToggleGroup={(group) => {
+                    setSendUsesCustomCoinSelection(true)
+                    const fullySelected = group.keys.every((k) => selectedSpendUtxoKeys.has(k))
+                    if (fullySelected) group.keys.forEach((k) => toggleSpendUtxo(k))
+                    else group.keys.forEach((k) => {
+                      if (!selectedSpendUtxoKeys.has(k)) toggleSpendUtxo(k)
+                    })
+                    void loadNetworkFee()
+                  }}
+                />
+              </div>
             </details>
-            <div style={{ marginTop: 14 }}>
+            <div className="send-load-tx">
               <button
                 type="button"
-                className="send-advanced-link"
+                className="send-load-tx-btn"
                 disabled={busy}
                 onClick={() => loadDraftInputRef.current?.click()}
               >
                 Load transaction
               </button>
-              <p className="muted" style={{ fontSize: 12, marginTop: 6, marginBottom: 0 }}>
-                Resume a saved unsigned PSBT or JSON draft.
+              <p className="muted send-load-tx-hint">
+                Load an unsigned, partial, or fully signed PSBT/PSKT file. Next cosigner uses this too.
               </p>
             </div>
           </div>
@@ -2489,7 +2670,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
               ) : null}
             </div>
           ) : null}
-          {!isUsbHardwareWallet && qrFrames.length > 0 ? (
+          {!isUsbHardwareWallet && qrFrames.length > 0 && !signedBroadcastReady ? (
             <div style={{ textAlign: 'center', marginTop: 16 }}>
               <h4>Scan on SeedMask</h4>
               <AnimatedQRView
@@ -2513,7 +2694,11 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
                 }
               />
             </div>
-          ) : !isUsbHardwareWallet && buildSummary && !busy && !buildError ? (
+          ) : !isUsbHardwareWallet && signedBroadcastReady && buildSummary && !busy ? (
+            <p className="muted" style={{ marginTop: 16, fontSize: 13 }}>
+              Fully signed — tap <strong>Broadcast</strong> when you are ready.
+            </p>
+          ) : !isUsbHardwareWallet && buildSummary && !busy && !buildError && !signedBroadcastReady ? (
             <p style={{ color: 'var(--danger)', fontSize: 13 }}>
               QR could not be rendered — tap Back and try again.
             </p>

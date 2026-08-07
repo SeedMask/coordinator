@@ -32,12 +32,18 @@ from .tx_pipeline import (
     validate_address,
 )
 from .wallet_store import (
+    change_wallet_password,
+    encrypt_wallet,
     get_active_wallet,
     get_wallet,
+    is_wallet_unlocked,
     list_wallets,
     load_store,
+    lock_wallet,
     set_active_wallet,
+    unlock_wallet,
     update_wallet,
+    wallet_needs_unlock,
 )
 
 _coordinator = Coordinator()
@@ -125,6 +131,23 @@ class WalletIn(BaseModel):
     hardware: str | None = None
     keystore_label: str | None = None
     activate: bool = True
+    password: str | None = None
+    password_hint: str | None = None
+
+
+class WalletUnlockIn(BaseModel):
+    password: str = ""
+
+
+class WalletEncryptIn(BaseModel):
+    password: str = ""
+    password_hint: str | None = None
+
+
+class WalletChangePasswordIn(BaseModel):
+    current_password: str = ""
+    new_password: str = ""
+    password_hint: str | None = None
 
 
 class WalletUpdateIn(BaseModel):
@@ -169,11 +192,14 @@ class DescriptorWalletIn(BaseModel):
     label: str = "Descriptor wallet"
     scan_limit: int | None = Field(default=None, ge=5, le=100)
     activate: bool = True
+    password: str | None = None
+    password_hint: str | None = None
 
 
 class WalletImportIn(BaseModel):
     export_json: dict
     activate: bool = True
+    password: str | None = None
 
 
 class BuildSweepIn(BaseModel):
@@ -302,10 +328,15 @@ def _wallet_dict(cfg) -> dict:
     from .wallet_store import effective_wallet_account
 
     d = cfg.to_dict()
-    d["account"] = effective_wallet_account(cfg)
+    d.pop("encrypted_blob", None)
+    d["encrypted"] = bool(getattr(cfg, "encrypted", False))
+    d["unlocked"] = (not d["encrypted"]) or is_wallet_unlocked(cfg.id)
+    d["account"] = effective_wallet_account(cfg) if (cfg.kpub or "").strip() else int(cfg.account or 0)
     stored_deriv = str(d.get("derivation") or "").strip()
     stored_fp = str(d.get("fingerprint") or "").strip()
     stored_script = str(d.get("script_type") or "").strip()
+    if wallet_needs_unlock(cfg):
+        return d
     if stored_deriv and stored_fp:
         d["derivation"] = stored_deriv
         d["fingerprint"] = stored_fp
@@ -319,7 +350,7 @@ def _wallet_dict(cfg) -> dict:
         d["script_type"] = stored_script or meta.get("script_type") or ""
     except ValueError:
         if not stored_deriv:
-            acct = effective_wallet_account(cfg)
+            acct = effective_wallet_account(cfg) if (cfg.kpub or "").strip() else int(cfg.account or 0)
             if cfg.coin == "bitcoin":
                 d["derivation"] = f"m/84'/0'/{acct}'"
             else:
@@ -342,6 +373,32 @@ def _wallet_dict(cfg) -> dict:
     return d
 
 
+def _require_wallet_unlocked(wallet_id: str):
+    cfg = get_wallet(wallet_id)
+    if not cfg:
+        raise HTTPException(404, "Wallet not found")
+    if wallet_needs_unlock(cfg):
+        raise HTTPException(403, "Wallet is locked — unlock with password first")
+    return cfg
+
+
+def _resolve_wallet_id(wallet_id: str | None) -> str:
+    if wallet_id:
+        if not get_wallet(wallet_id):
+            raise HTTPException(404, "Wallet not found")
+        return wallet_id
+    active = get_active_wallet()
+    if not active:
+        raise HTTPException(400, "No watch-only wallet — add kpub first")
+    return active.id
+
+
+def _resolve_unlocked_wallet_id(wallet_id: str | None) -> str:
+    wid = _resolve_wallet_id(wallet_id)
+    _require_wallet_unlocked(wid)
+    return wid
+
+
 def _app_version() -> str:
     root = os.environ.get("SEEDPASS_COORDINATOR_ROOT", "").strip()
     if root:
@@ -354,17 +411,6 @@ def _app_version() -> str:
 def _build_stamp() -> str:
     ver = _app_version()
     return f"v{ver}" if ver else ""
-
-
-def _resolve_wallet_id(wallet_id: str | None) -> str:
-    if wallet_id:
-        if not get_wallet(wallet_id):
-            raise HTTPException(404, "Wallet not found")
-        return wallet_id
-    active = get_active_wallet()
-    if not active:
-        raise HTTPException(400, "No watch-only wallet — add kpub first")
-    return active.id
 
 
 @app.get("/")
@@ -381,7 +427,7 @@ async def status():
     net = load_network_settings()
     summaries = wallet_state.get_all_wallet_summaries()
     wallets_out = []
-    for w in store.wallets:
+    for w in list_wallets():
         d = _wallet_dict(w)
         snap = summaries.get(w.id)
         if snap:
@@ -425,7 +471,7 @@ async def wallet_sync_enqueue(
     wait: bool = False,
 ):
     """Enqueue background sync (hot | discover | deep). UI reads /state immediately."""
-    _resolve_wallet_id(wallet_id)
+    _resolve_unlocked_wallet_id(wallet_id)
     if mode not in ("hot", "discover", "deep"):
         raise HTTPException(400, "mode must be hot, discover, or deep")
     from .sync_worker import SyncPriority
@@ -503,7 +549,7 @@ async def wallets_list():
     return {
         "active_wallet_id": store.active_wallet_id,
         "active_wallet_by_coin": dict(store.active_wallet_by_coin),
-        "wallets": [_wallet_dict(w) for w in store.wallets],
+        "wallets": [_wallet_dict(w) for w in list_wallets()],
     }
 
 
@@ -600,6 +646,8 @@ async def wallets_create(body: WalletIn):
             hardware=(body.hardware or "").strip().lower(),
             keystore_label=(body.keystore_label or "").strip(),
             activate=body.activate,
+            password=(body.password or "").strip() or None,
+            password_hint=(body.password_hint or "").strip() or None,
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
@@ -642,6 +690,8 @@ async def wallets_update(wallet_id: str, body: WalletUpdateIn):
             keystore_label=body.keystore_label,
             multisig_cosigners=multisig_cosigners,
         )
+    except PermissionError as e:
+        raise HTTPException(403, str(e)) from e
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
     return {"ok": True, "wallet": _wallet_dict(cfg)}
@@ -659,8 +709,69 @@ async def wallets_delete(wallet_id: str):
 async def wallets_activate(wallet_id: str):
     try:
         cfg = set_active_wallet(wallet_id)
+    except PermissionError as e:
+        raise HTTPException(403, str(e)) from e
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
+    return {"ok": True, "wallet": _wallet_dict(cfg)}
+
+
+@app.post("/api/wallets/{wallet_id}/unlock")
+async def wallets_unlock(wallet_id: str, body: WalletUnlockIn):
+    try:
+        cfg = unlock_wallet(wallet_id, body.password or "")
+    except ValueError as e:
+        msg = str(e)
+        if "Wrong password" in msg or "corrupted" in msg:
+            raise HTTPException(401, msg) from e
+        if "not found" in msg.lower():
+            raise HTTPException(404, msg) from e
+        raise HTTPException(400, msg) from e
+    return {"ok": True, "wallet": _wallet_dict(cfg)}
+
+
+@app.post("/api/wallets/{wallet_id}/lock")
+async def wallets_lock(wallet_id: str):
+    if not get_wallet(wallet_id):
+        raise HTTPException(404, "Wallet not found")
+    cfg = lock_wallet(wallet_id)
+    if not cfg:
+        raise HTTPException(404, "Wallet not found")
+    return {"ok": True, "wallet": _wallet_dict(cfg)}
+
+
+@app.post("/api/wallets/{wallet_id}/encrypt")
+async def wallets_encrypt(wallet_id: str, body: WalletEncryptIn):
+    try:
+        cfg = encrypt_wallet(
+            wallet_id,
+            body.password or "",
+            password_hint=body.password_hint,
+        )
+    except ValueError as e:
+        msg = str(e)
+        if "not found" in msg.lower():
+            raise HTTPException(404, msg) from e
+        raise HTTPException(400, msg) from e
+    return {"ok": True, "wallet": _wallet_dict(cfg)}
+
+
+@app.post("/api/wallets/{wallet_id}/change-password")
+async def wallets_change_password(wallet_id: str, body: WalletChangePasswordIn):
+    try:
+        cfg = change_wallet_password(
+            wallet_id,
+            body.current_password or "",
+            body.new_password or "",
+            password_hint=body.password_hint,
+        )
+    except ValueError as e:
+        msg = str(e)
+        if "Wrong password" in msg or "corrupted" in msg:
+            raise HTTPException(401, msg) from e
+        if "not found" in msg.lower():
+            raise HTTPException(404, msg) from e
+        raise HTTPException(400, msg) from e
     return {"ok": True, "wallet": _wallet_dict(cfg)}
 
 
@@ -690,7 +801,7 @@ async def remove_wallet():
 
 @app.post("/api/wallets/{wallet_id}/refresh/discover")
 async def refresh_wallet_discover(wallet_id: str):
-    _resolve_wallet_id(wallet_id)
+    _resolve_unlocked_wallet_id(wallet_id)
     cfg = get_wallet(wallet_id)
     from .wallet_store import resolved_wallet_coin
 
@@ -712,7 +823,7 @@ async def refresh_wallet_discover_stream(wallet_id: str):
     import asyncio
     import json
 
-    _resolve_wallet_id(wallet_id)
+    _resolve_unlocked_wallet_id(wallet_id)
     cfg = get_wallet(wallet_id)
     if not cfg:
         raise HTTPException(404, "Wallet not found")
@@ -759,7 +870,7 @@ async def refresh_wallet_discover_stream(wallet_id: str):
 
 @app.post("/api/wallets/{wallet_id}/refresh/watch")
 async def refresh_wallet_watch(wallet_id: str):
-    _resolve_wallet_id(wallet_id)
+    _resolve_unlocked_wallet_id(wallet_id)
     cfg = get_wallet(wallet_id)
     from .wallet_store import resolved_wallet_coin
 
@@ -783,7 +894,7 @@ async def _refresh_wallet_watch(wallet_id: str) -> dict:
 
 @app.post("/api/wallets/{wallet_id}/refresh")
 async def refresh_wallet_by_id(wallet_id: str):
-    _resolve_wallet_id(wallet_id)
+    _resolve_unlocked_wallet_id(wallet_id)
     cfg = get_wallet(wallet_id)
     from .wallet_store import resolved_wallet_coin
 
@@ -812,7 +923,7 @@ async def refresh_wallet_stream(wallet_id: str):
     import asyncio
     import json
 
-    _resolve_wallet_id(wallet_id)
+    _resolve_unlocked_wallet_id(wallet_id)
     cfg = get_wallet(wallet_id)
     if not cfg:
         raise HTTPException(404, "Wallet not found")
@@ -949,9 +1060,7 @@ async def get_balance():
 
 @app.get("/api/wallets/{wallet_id}/addresses")
 async def list_addresses_by_id(wallet_id: str):
-    cfg = get_wallet(wallet_id)
-    if not cfg:
-        raise HTTPException(404, "Wallet not found")
+    cfg = _require_wallet_unlocked(wallet_id)
     addrs = service_for(cfg).receive_addresses(cfg)
     return {"addresses": [{"index": i, "address": a} for i, a in addrs]}
 
@@ -1043,9 +1152,7 @@ async def push_wallet_utxo_cache(wallet_id: str, body: UtxoCacheIn):
 
 @app.get("/api/wallets/{wallet_id}/addresses/detailed")
 async def addresses_detailed(wallet_id: str, balances: bool = True):
-    cfg = get_wallet(wallet_id)
-    if not cfg:
-        raise HTTPException(404, "Wallet not found")
+    cfg = _require_wallet_unlocked(wallet_id)
     # Addresses are derived offline from kpub/xpub; balances use cached UTXOs only (no forced refresh).
     utxos = _wallet_utxos_from_cache(wallet_id) if balances else []
     return service_for(cfg).address_book(cfg, utxos or [], wallet_id=wallet_id)
@@ -1231,7 +1338,7 @@ async def wallet_transaction_visualize(wallet_id: str, txid: str):
 @app.post("/api/tx/rbf-bump")
 async def tx_rbf_bump(body: RbfBumpIn):
     """Build a BIP125 RBF replacement PSBT for an unconfirmed Bitcoin send."""
-    wid = _resolve_wallet_id(body.wallet_id)
+    wid = _resolve_unlocked_wallet_id(body.wallet_id)
     cfg = get_wallet(wid)
     if not cfg:
         raise HTTPException(400, "Configure watch-only wallet first")
@@ -1355,6 +1462,7 @@ async def wallet_label_tx(wallet_id: str, txid: str, body: LabelIn):
 
 @app.get("/api/wallets/{wallet_id}/export")
 async def wallet_export(wallet_id: str):
+    """Export a SeedMask wallet file. Password-protected wallets stay sealed (no unlock required)."""
     from .wallet_export import export_wallet_bundle
 
     try:
@@ -1375,7 +1483,13 @@ async def wallet_import(body: WalletImportIn):
     from .wallet_export import import_wallet_bundle
 
     try:
-        cfg = import_wallet_bundle(body.export_json, activate=body.activate)
+        cfg = import_wallet_bundle(
+            body.export_json,
+            activate=body.activate,
+            password=body.password,
+        )
+    except PermissionError as e:
+        raise HTTPException(401, str(e)) from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     return {"wallet": cfg.to_dict()}
@@ -1400,9 +1514,7 @@ async def descriptor_parse(body: DescriptorWalletIn):
 async def wallet_descriptor_export(wallet_id: str):
     from .descriptor_wallet import export_descriptor
 
-    cfg = get_wallet(wallet_id)
-    if not cfg:
-        raise HTTPException(404, "Wallet not found")
+    cfg = _require_wallet_unlocked(wallet_id)
     try:
         text = export_descriptor(cfg)
     except ValueError as e:
@@ -1435,8 +1547,10 @@ async def wallet_from_descriptor(body: DescriptorWalletIn):
         multisig_cosigners=parsed.multisig_cosigners or None,
         descriptor=parsed.descriptor,
         activate=body.activate,
+        password=(body.password or "").strip() or None,
+        password_hint=(body.password_hint or "").strip() or None,
     )
-    return {"wallet": saved.to_dict()}
+    return {"wallet": _wallet_dict(saved)}
 
 
 @app.get("/api/wallet/transactions")
@@ -1682,7 +1796,7 @@ async def fee_estimate_post(body: FeeEstimateIn):
 
 @app.post("/api/tx/build")
 async def tx_build(body: BuildTxIn):
-    wid = _resolve_wallet_id(body.wallet_id)
+    wid = _resolve_unlocked_wallet_id(body.wallet_id)
     cfg = get_wallet(wid)
     if not cfg:
         raise HTTPException(400, "Configure watch-only wallet first")
@@ -1860,7 +1974,7 @@ async def tx_build(body: BuildTxIn):
 @app.post("/api/tx/build-sweep")
 async def tx_build_sweep(body: BuildSweepIn):
     """Build PSKB bundle for multi-UTXO sweep (rusty-kaspa transport format)."""
-    wid = _resolve_wallet_id(body.wallet_id)
+    wid = _resolve_unlocked_wallet_id(body.wallet_id)
     cfg = get_wallet(wid)
     if not cfg:
         raise HTTPException(400, "Configure watch-only wallet first")
@@ -1986,7 +2100,7 @@ async def tx_build_sweep(body: BuildSweepIn):
 @app.post("/api/tx/draft/{draft_id}/sweep-qr")
 async def draft_sweep_qr(draft_id: str, body: SweepQrIn, wallet_id: str | None = None):
     """QR for coin N in a multi-UTXO sweep draft (0-based index)."""
-    wid = _resolve_wallet_id(wallet_id)
+    wid = _resolve_unlocked_wallet_id(wallet_id)
     cfg = get_wallet(wid)
     if not cfg:
         raise HTTPException(400, "Configure watch-only wallet first")
@@ -2077,18 +2191,33 @@ async def get_draft_export(draft_id: str, wallet_id: str | None = None):
     except Exception:
         pass
     pskt_hex = None
+    signatures_loaded = 0
+    signatures_required = 1
+    pskt_obj = None
     if pskt:
         try:
             pskt_hex = pskt_to_hex(pskt)
         except Exception:
             pskt_hex = None
+        pskt_obj = pskt
+        try:
+            from .tx_pipeline import _kaspa_partial_signature_status
+
+            have, need = _kaspa_partial_signature_status(pskt)
+            if need > 0:
+                signatures_loaded, signatures_required = have, need
+        except Exception:
+            pass
     return {
         "draft_id": draft_id,
         "unsigned": unsigned,
+        "pskt": pskt_obj,
         "pskt_hex": pskt_hex,
         "pskb_hex": pskb_hex,
         "pskt_count": pskt_count,
         "format": "seedpass_pskt_draft_v1" if pskt or pskb_hex else "legacy_json_v2",
+        "signatures_loaded": signatures_loaded,
+        "signatures_required": signatures_required,
     }
 
 
@@ -2108,21 +2237,38 @@ async def get_draft_visualize(draft_id: str, wallet_id: str | None = None):
 
 @app.post("/api/tx/import")
 async def tx_import(body: ImportTxIn):
-    from .tx_pipeline import import_btc_unsigned, import_pskt_hex, is_bitcoin_draft, parse_draft_file
+    from .tx_pipeline import (
+        _is_ready_v2_tx,
+        _kaspa_partial_signature_status,
+        attach_unsigned_draft_hash,
+        import_btc_unsigned,
+        import_pskt_hex,
+        is_bitcoin_draft,
+        parse_draft_file,
+        strip_ready_to_unsigned,
+    )
 
     unsigned = body.unsigned
     pskt = None
 
+    # --- Bitcoin PSBT path (unsigned, partial, or fully signed) ---
     if is_bitcoin_draft(unsigned) or (
         unsigned.get("format") == "seedpass_psbt_draft_v1"
         and (unsigned.get("psbt_base64") or unsigned.get("psbts"))
     ) or (
         isinstance(unsigned.get("psbt_base64"), str) and unsigned["psbt_base64"].strip()
     ):
+        from .bitcoin_psbt import (
+            psbt_is_finalizable,
+            psbt_signature_progress,
+            signed_payload_from_psbt_bytes,
+        )
         from .ur_qr_psbt import fountain_qr_frames_base64_psbt
 
         try:
             draft_id, psbt_bytes, psbt_count = import_btc_unsigned(unsigned)
+            have, need = psbt_signature_progress(psbt_bytes)
+            complete = psbt_is_finalizable(psbt_bytes)
             qr_pack = fountain_qr_frames_base64_psbt(
                 psbt_bytes, qr_display_mode=body.qr_display_mode or "animated"
             )
@@ -2132,7 +2278,7 @@ async def tx_import(body: ImportTxIn):
 
         raw = _load_draft_raw(draft_id)
         summary = raw.get("summary") if isinstance(raw.get("summary"), dict) else {}
-        return {
+        out = {
             "draft_id": draft_id,
             "unsigned": summary,
             "coin": "bitcoin",
@@ -2140,26 +2286,94 @@ async def tx_import(body: ImportTxIn):
             "psbt_count": psbt_count,
             **qr_pack,
             "summary": summary,
+            "signatures_loaded": have,
+            "signatures_required": need,
+            "signing_complete": complete,
         }
+        if complete:
+            ready = signed_payload_from_psbt_bytes(psbt_bytes)
+            out["ready"] = ready
+            out["signed"] = ready
+            out["message"] = "Fully signed PSBT loaded — ready to broadcast"
+        elif have > 0:
+            out["message"] = (
+                f"Partial Bitcoin multisig loaded ({have}/{need}). "
+                "Sign on SeedMask or pass Save transaction to the next cosigner."
+            )
+        return out
+
+    # --- Kaspa: fully signed ready v2 (broadcast when ready) ---
+    ready_candidate = unsigned
+    if (
+        not _is_ready_v2_tx(ready_candidate)
+        and isinstance(unsigned.get("unsigned"), dict)
+        and _is_ready_v2_tx(unsigned["unsigned"])
+    ):
+        ready_candidate = unsigned["unsigned"]
+    if _is_ready_v2_tx(ready_candidate):
+        import copy
+
+        ready = copy.deepcopy(ready_candidate)
+        draft_unsigned = strip_ready_to_unsigned(ready)
+        ready["draft_hash"] = draft_unsigned.get("draft_hash")
+        draft_id = save_draft(draft_unsigned, pskt=None)
+        summary = _summary_from_unsigned(draft_unsigned)
+        return {
+            "draft_id": draft_id,
+            "unsigned": draft_unsigned,
+            "summary": summary,
+            "signing_complete": True,
+            "signatures_loaded": 1,
+            "signatures_required": 1,
+            "ready": ready,
+            "signed": ready,
+            "message": "Fully signed transaction loaded — ready to broadcast",
+            "qr_frames_base64": [],
+            "qr_frame_count": 0,
+            "qr_display_mode": "animated",
+        }
+
+    # Device signature-only payload without a draft
+    if unsigned.get("signatures") and not unsigned.get("inputs"):
+        raise HTTPException(
+            400,
+            "This file contains device signatures only. "
+            "Use Send → Load transaction for an unsigned/partial draft, "
+            "then Load signed transaction on Review & Sign.",
+        )
 
     if isinstance(unsigned.get("pskt_hex"), str) and unsigned["pskt_hex"].strip().upper().startswith("PSKT"):
         pskt, unsigned = import_pskt_hex(unsigned["pskt_hex"])
     elif unsigned.get("format") == "seedpass_pskt_draft_v1":
-        pskt, unsigned = parse_draft_file(unsigned)
+        if isinstance(unsigned.get("pskt"), dict):
+            pskt, unsigned = parse_draft_file(unsigned)
+        elif isinstance(unsigned.get("pskt_hex"), str) and unsigned["pskt_hex"].strip().upper().startswith(
+            "PSKT"
+        ):
+            envelope_unsigned = (
+                unsigned["unsigned"]
+                if isinstance(unsigned.get("unsigned"), dict)
+                else None
+            )
+            pskt, from_hex = import_pskt_hex(unsigned["pskt_hex"])
+            unsigned = (
+                envelope_unsigned
+                if isinstance(envelope_unsigned, dict) and envelope_unsigned.get("inputs")
+                else from_hex
+            )
+        else:
+            pskt, unsigned = parse_draft_file(unsigned)
     elif "inputs" not in unsigned and isinstance(unsigned.get("unsigned"), dict):
         inner = unsigned["unsigned"]
         if isinstance(inner, dict) and inner.get("format") == "seedpass_pskt_draft_v1":
             pskt, unsigned = parse_draft_file(inner)
+        elif isinstance(unsigned.get("pskt"), dict) or (
+            isinstance(unsigned.get("pskt_hex"), str) and unsigned["pskt_hex"].strip()
+        ):
+            pskt, unsigned = parse_draft_file(unsigned)
         else:
             unsigned = inner
     if not unsigned.get("inputs"):
-        if unsigned.get("signatures"):
-            raise HTTPException(
-                400,
-                "This file contains device signatures, not a signing draft. "
-                "In Send → Review & Sign, use “Load signed transaction…” after loading the unsigned draft, "
-                "or paste the JSON under Signed from SeedMask.",
-            )
         raise HTTPException(400, "Invalid unsigned transaction JSON (missing inputs)")
     try:
         wid = _resolve_wallet_id(None)
@@ -2180,6 +2394,12 @@ async def tx_import(body: ImportTxIn):
                 )
     except Exception:
         pass
+    # If handoff body still has top-level pskt with more partials, prefer it
+    if body.unsigned.get("format") == "seedpass_pskt_draft_v1" and isinstance(
+        body.unsigned.get("pskt"), dict
+    ):
+        pskt = body.unsigned["pskt"]
+    attach_unsigned_draft_hash(unsigned)
     draft_id = save_draft(unsigned, pskt=pskt)
     from .ur_qr import fountain_qr_frames_base64
 
@@ -2189,12 +2409,26 @@ async def tx_import(body: ImportTxIn):
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
-    return {
+    have, need = (0, 1)
+    if pskt:
+        have, need = _kaspa_partial_signature_status(pskt)
+        if need <= 0:
+            have, need = 0, 1
+    out = {
         "draft_id": draft_id,
         "unsigned": unsigned,
         **qr_pack,
         "summary": _summary_from_unsigned(unsigned),
+        "signatures_loaded": have,
+        "signatures_required": need,
+        "signing_complete": False,
     }
+    if have > 0 and need > 1:
+        out["message"] = (
+            f"Partial Kaspa multisig loaded ({have}/{need}). "
+            "Sign on SeedMask or pass Save transaction to the next cosigner."
+        )
+    return out
 
 
 @app.post("/api/tx/finish")
@@ -2232,7 +2466,9 @@ async def tx_finish(body: FinishIn):
         raise HTTPException(404, str(e)) from e
     except ValueError as e:
         msg = str(e)
-        if msg.startswith("Partial Kaspa multisig signature saved"):
+        if msg.startswith("Partial Kaspa multisig signature saved") or msg.startswith(
+            "Partial Bitcoin multisig signature saved"
+        ):
             import re
 
             m = re.search(r"\((\d+)/(\d+)\)", msg)

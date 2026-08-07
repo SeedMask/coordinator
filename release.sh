@@ -7,7 +7,7 @@ ELECTRON="$ROOT/electron"
 
 if [[ ! -f "$ELECTRON/package.json" ]]; then
   echo "error: expected $ELECTRON/package.json" >&2
-  echo "Usage: bash release.sh" >&2
+  echo "Usage: bash SeedMask_Coordinator/release.sh" >&2
   exit 1
 fi
 

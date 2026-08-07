@@ -67,8 +67,7 @@ Legend:
 | `kaspa_send.py` | **KEEP** | CLI send helper | above |
 | `kaspa_pskt_wasm.py` | **KEEP** | Bridge to WASM validator | Node + **rusty-kaspa WASM** |
 | `kaspa_wasm_node/` | **KEEP** | Official kaspa-wasm32-sdk v2 | Rust→WASM binary |
-
-Device UI RGB565 generators (`gen_*_rgb565.py`, etc.) live in firmware, not this repo.
+| `gen_*_rgb565.py` | **N/A** | Device firmware assets | Not coordinator |
 
 ---
 

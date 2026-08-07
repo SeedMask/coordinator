@@ -11,6 +11,7 @@ import { ChainLogoMark, SeedMaskLogoMark } from '@renderer/components/BrandMarks
 import { NavIcon } from '@renderer/components/icons'
 import { ScanningPulseBar } from '@renderer/components/ScanningPulseBar'
 import { WalletStrip } from '@renderer/components/WalletStrip'
+import { WalletLockedPanel } from '@renderer/components/WalletLockedPanel'
 import { DashboardView } from './DashboardView'
 import { AddressesView } from './AddressesView'
 import { UtxosView } from './UtxosView'
@@ -57,11 +58,21 @@ export function MainShellView(): React.JSX.Element {
     api,
     loadWallets,
     setStatusMessage,
+    setShowReceiveSheet,
+    lockEncryptedWallet,
+    requestWalletUnlock,
+    requestChangeWalletPassword,
+    requestEncryptWallet,
   } = useApp()
 
   const [walletOrderIds, setWalletOrderIds] = useState<string[]>([])
   /** Keeps Add Wallet form mounted after "+" so switching wallets doesn't wipe WIP fields. */
   const [addWalletSession, setAddWalletSession] = useState(false)
+  /** Remount Dashboard when the user re-selects it so they get the initial view. */
+  const [dashboardHomeKey, setDashboardHomeKey] = useState(0)
+  /** Remount System settings (back to General) when re-selected from the main sidebar. */
+  const [systemSettingsHomeKey, setSystemSettingsHomeKey] = useState(0)
+  const contentAreaRef = useRef<HTMLDivElement>(null)
   const prevChainRef = useRef(selectedChain)
 
   useEffect(() => {
@@ -198,13 +209,46 @@ export function MainShellView(): React.JSX.Element {
   }
 
   const activeChainWallet = walletForChain(selectedChain, wallets, activeWalletByCoin, activeWalletId)
+  const walletLocked = Boolean(activeChainWallet?.encrypted && !activeChainWallet.unlocked)
   const renamingWallet = renamingWalletId
     ? wallets.find((w) => w.id === renamingWalletId) ?? null
     : null
 
+  function unlockActiveWallet(): void {
+    if (!activeChainWallet) return
+    void requestWalletUnlock(activeChainWallet.id, activeChainWallet)
+  }
+
   function navigate(section: SidebarSection): void {
-    if (showSendWizard && section !== 'dashboard') dismissSendWizard()
-    if (section === 'systemSettings') endAddWalletSession()
+    // One shared gate: wallet panes stay blocked until unlock — don't switch into them.
+    if (
+      walletLocked &&
+      (section === 'dashboard' ||
+        section === 'addresses' ||
+        section === 'coins' ||
+        section === 'walletSettings')
+    ) {
+      unlockActiveWallet()
+      return
+    }
+    if (section === 'dashboard') {
+      // Sidebar stays on Dashboard during Send — re-click should return home.
+      if (showSendWizard) dismissSendWizard()
+      setShowReceiveSheet(false)
+      if (sidebarSelection === 'dashboard' || showSendWizard) {
+        setDashboardHomeKey((k) => k + 1)
+        contentAreaRef.current?.scrollTo({ top: 0, left: 0 })
+      }
+    } else if (showSendWizard) {
+      dismissSendWizard()
+    }
+    if (section === 'systemSettings') {
+      endAddWalletSession()
+      if (sidebarSelection === 'systemSettings') {
+        setSystemSettingsHomeKey((k) => k + 1)
+        contentAreaRef.current?.scrollTo({ top: 0, left: 0 })
+      }
+    }
     setSidebarSelection(section)
   }
 
@@ -231,9 +275,12 @@ export function MainShellView(): React.JSX.Element {
                 <button
                   key={item.id}
                   type="button"
-                  className={`sidebar-nav-btn${sidebarSelection === item.id ? ' active' : ''}`}
+                  className={`sidebar-nav-btn${
+                    !walletLocked && sidebarSelection === item.id ? ' active' : ''
+                  }${walletLocked ? ' locked-gate' : ''}`}
                   onClick={() => navigate(item.id)}
                   disabled={!walletConfigured}
+                  title={walletLocked ? 'Unlock wallet to open' : undefined}
                 >
                   <NavIcon section={item.id} size={20} />
                   {item.label}
@@ -272,6 +319,13 @@ export function MainShellView(): React.JSX.Element {
           onSelect={selectStripWallet}
           onRename={setRenamingWalletId}
           onDelete={(id) => void deleteStripWallet(id)}
+          onLock={(id) => void lockEncryptedWallet(id)}
+          onUnlock={(id) => {
+            const w = wallets.find((x) => x.id === id)
+            void requestWalletUnlock(id, w)
+          }}
+          onChangePassword={(id) => requestChangeWalletPassword(id)}
+          onEncrypt={(id) => requestEncryptWallet(id)}
           onReorder={applyWalletOrder}
           onAdd={openAddWallet}
           onSelectDraft={openAddWallet}
@@ -282,8 +336,10 @@ export function MainShellView(): React.JSX.Element {
           chipPresentation={stripChipPresentation}
         />
 
-        <div className={`content-area${isAddingWallet || showSendWizard || sidebarSelection === 'systemSettings' ? ' flush' : ''}`}>
-          {addWalletSession && (
+        <div
+          ref={contentAreaRef}
+          className={`content-area${isAddingWallet || showSendWizard || sidebarSelection === 'systemSettings' ? ' flush' : ''}`}
+        >          {addWalletSession && (
             <div
               className={isAddingWallet ? 'add-wallet-session active' : 'add-wallet-session'}
               aria-hidden={!isAddingWallet}
@@ -299,13 +355,18 @@ export function MainShellView(): React.JSX.Element {
           )}
           {!isAddingWallet &&
             (sidebarSelection === 'systemSettings' ? (
-              <SystemSettingsView />
+              <SystemSettingsView key={systemSettingsHomeKey} />
+            ) : walletLocked && activeChainWallet ? (
+              <WalletLockedPanel
+                walletLabel={activeChainWallet.label}
+                onUnlock={unlockActiveWallet}
+              />
             ) : showSendWizard ? (
               <SendWizardView onClose={dismissSendWizard} />
             ) : walletConfigured ? (
               <div className="kept-panes">
                 <KeptPane active={sidebarSelection === 'dashboard'}>
-                  <DashboardView />
+                  <DashboardView key={dashboardHomeKey} />
                 </KeptPane>
                 <KeptPane active={sidebarSelection === 'addresses'}>
                   <AddressesView />

@@ -20,6 +20,9 @@ declare global {
       openFile: (opts: {
         filters?: { name: string; extensions: string[] }[]
         multi?: boolean
+        title?: string
+        message?: string
+        defaultPath?: string
       }) => Promise<string | string[] | null>
       pickPath: (opts: { title?: string; message?: string }) => Promise<string | null>
       readFile: (path: string) => Promise<ArrayBuffer>

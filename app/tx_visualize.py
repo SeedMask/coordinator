@@ -1209,6 +1209,7 @@ def visualize_kaspa_confirmed(
     *,
     receive_pairs: list[tuple[int, str]],
     change_pairs: list[tuple[int, str]],
+    confirmations: int | None = None,
 ) -> dict[str, Any]:
     from .transaction_history import _kaspa_addr_key, _kaspa_wallet_addrs
 
@@ -1304,18 +1305,20 @@ def visualize_kaspa_confirmed(
 
     fee_sompi = max(0, input_total - explicit_out_total)
     block_time = _normalized_block_time(tx, coin="kaspa")
-    block_hash = str(tx.get("accepting_block_hash") or tx.get("block_hash") or "")
+    from .transaction_history import _accepting_blue_from_tx
+
+    accepting_blue = _accepting_blue_from_tx(tx)
     metadata: list[dict[str, Any]] = []
+    if confirmations is not None:
+        metadata.append(_metadata_row("Confirmations", f"{max(0, int(confirmations)):,}"))
+    elif accepting_blue > 0 or block_time > 0:
+        metadata.append(_metadata_row("Confirmations", "1"))
+    else:
+        metadata.append(_metadata_row("Confirmations", "0"))
     if block_time > 0:
         metadata.append(_metadata_row("Timestamp", _format_unix_timestamp(block_time)))
-    if block_hash:
-        metadata.append(
-            _metadata_row(
-                "Block",
-                _short_block_hash(block_hash),
-                detail=block_hash if len(block_hash) > 22 else None,
-            )
-        )
+    if accepting_blue > 0:
+        metadata.append(_metadata_row("Blue score", f"{accepting_blue:,}"))
 
     diagram_outputs.append(
         _visual_row(
@@ -1353,6 +1356,8 @@ def visualize_kaspa_confirmed(
         "metadata": metadata,
         "warnings": [],
         "block_time": block_time if block_time > 0 else None,
+        "confirmations": int(confirmations) if confirmations is not None else None,
+        "accepting_block_blue_score": accepting_blue if accepting_blue > 0 else None,
     }
 
 
@@ -1494,4 +1499,72 @@ async def visualize_wallet_transaction(
     tx = await fetch_kaspa_tx_for_wallet(wallet_id, norm)
     if not tx:
         raise ValueError("Transaction not found on chain")
-    return visualize_kaspa_confirmed(tx, receive_pairs=receive_pairs, change_pairs=change_pairs)
+
+    from .transaction_history import (
+        _accepting_blue_from_tx,
+        _fetch_kaspa_tx_acceptance,
+        _kaspa_confirmations_from_tx,
+        _kaspa_virtual_blue_score,
+    )
+
+    # Prefer accepting blue already stored on the wallet history row.
+    try:
+        from . import wallet_state
+
+        for row in wallet_state.get_transactions(wallet_id) or []:
+            if not isinstance(row, dict):
+                continue
+            if _norm_txid(str(row.get("transaction_id") or "")) != norm:
+                continue
+            if _accepting_blue_from_tx(tx) <= 0:
+                blue = _accepting_blue_from_tx(row)
+                if blue > 0:
+                    tx = {**tx, "accepting_block_blue_score": blue}
+            if not tx.get("accepting_block_hash") and (
+                row.get("accepting_block_hash") or row.get("acceptingBlockHash")
+            ):
+                tx = {
+                    **tx,
+                    "accepting_block_hash": row.get("accepting_block_hash")
+                    or row.get("acceptingBlockHash"),
+                }
+            if _normalized_block_time(tx, coin="kaspa") <= 0:
+                try:
+                    bt = int(row.get("block_time") or 0)
+                except (TypeError, ValueError):
+                    bt = 0
+                if bt > 0:
+                    tx = {**tx, "block_time": bt}
+            break
+    except Exception:
+        pass
+
+    if _accepting_blue_from_tx(tx) <= 0:
+        try:
+            info = await _fetch_kaspa_tx_acceptance(norm)
+            if isinstance(info, dict):
+                blue = _accepting_blue_from_tx(info)
+                if blue > 0:
+                    tx = {**tx, "accepting_block_blue_score": blue}
+                if info.get("accepting_block_hash") or info.get("acceptingBlockHash"):
+                    tx = {
+                        **tx,
+                        "accepting_block_hash": info.get("accepting_block_hash")
+                        or info.get("acceptingBlockHash"),
+                    }
+                if info.get("is_accepted") is not None:
+                    tx = {**tx, "is_accepted": info.get("is_accepted")}
+                api_bt = int(info.get("block_time") or info.get("accepting_block_time") or 0)
+                if api_bt > 0 and _normalized_block_time(tx, coin="kaspa") <= 0:
+                    tx = {**tx, "block_time": api_bt}
+        except Exception:
+            pass
+
+    tip_blue = int(await _kaspa_virtual_blue_score(force=False) or 0)
+    conf = _kaspa_confirmations_from_tx(tx, tip_blue)
+    return visualize_kaspa_confirmed(
+        tx,
+        receive_pairs=receive_pairs,
+        change_pairs=change_pairs,
+        confirmations=conf,
+    )

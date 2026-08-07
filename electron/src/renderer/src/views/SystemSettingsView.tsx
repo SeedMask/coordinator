@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from '@renderer/state/AppProvider'
 import type { AppTheme, CoinChain, DisplayCurrency } from '@renderer/api/types'
 import { SeedMaskLogoMark } from '@renderer/components/BrandMarks'
@@ -30,6 +30,9 @@ export function SystemSettingsView(): React.JSX.Element {
   const { loadNetworkSettings, networkSettingsEnvelope } = useApp()
   const editor = useNetworkSettingsEditor()
   const [pane, setPane] = useState<SystemPane>('general')
+  const [generalKey, setGeneralKey] = useState(0)
+  const [connectionsKey, setConnectionsKey] = useState(0)
+  const detailRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     void loadNetworkSettings()
@@ -43,6 +46,16 @@ export function SystemSettingsView(): React.JSX.Element {
     return bitcoinHubLabel(bitcoin) || friendlyHost(bitcoin.esplora_primary, 'Recommended servers')
   }, [editor.draft, networkSettingsEnvelope])
 
+  function openPane(next: SystemPane): void {
+    if (pane === next) {
+      if (next === 'general') setGeneralKey((k) => k + 1)
+      else setConnectionsKey((k) => k + 1)
+    } else {
+      setPane(next)
+    }
+    detailRef.current?.scrollTo({ top: 0, left: 0 })
+  }
+
   return (
     <div className="system-settings-shell">
       <aside className="system-settings-sidebar">
@@ -50,7 +63,7 @@ export function SystemSettingsView(): React.JSX.Element {
         <button
           type="button"
           className={`sidebar-nav-btn system-settings-nav-btn${pane === 'general' ? ' active' : ''}`}
-          onClick={() => setPane('general')}
+          onClick={() => openPane('general')}
         >
           <SettingsNavIcon pane="general" />
           General
@@ -58,7 +71,7 @@ export function SystemSettingsView(): React.JSX.Element {
         <button
           type="button"
           className={`sidebar-nav-btn system-settings-nav-btn connections${pane === 'connections' ? ' active' : ''}`}
-          onClick={() => setPane('connections')}
+          onClick={() => openPane('connections')}
         >
           <SettingsNavIcon pane="connections" />
           <span className="system-settings-nav-label">
@@ -67,8 +80,12 @@ export function SystemSettingsView(): React.JSX.Element {
           </span>
         </button>
       </aside>
-      <div className="system-settings-detail">
-        {pane === 'general' ? <GeneralSettingsPanel /> : <ConnectionsSettingsView editor={editor} />}
+      <div className="system-settings-detail" ref={detailRef}>
+        {pane === 'general' ? (
+          <GeneralSettingsPanel key={generalKey} />
+        ) : (
+          <ConnectionsSettingsView key={connectionsKey} editor={editor} />
+        )}
       </div>
     </div>
   )

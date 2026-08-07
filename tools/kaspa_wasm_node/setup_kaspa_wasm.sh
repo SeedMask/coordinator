@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Download rusty-kaspa WASM v2 Node SDK for PSKT/PSKB validation.
-# Run: bash tools/kaspa_wasm_node/setup_kaspa_wasm.sh
+# Run: bash SeedPass_UI_Shell/tools/kaspa_wasm_node/setup_kaspa_wasm.sh
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"

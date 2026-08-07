@@ -74,6 +74,8 @@ class Coordinator:
         hardware: str = "",
         keystore_label: str = "",
         activate: bool = True,
+        password: str | None = None,
+        password_hint: str | None = None,
     ) -> WalletConfig:
         key = normalize_extended_key(kpub)
         coin_key = (coin or "kaspa").strip().lower()
@@ -131,6 +133,8 @@ class Coordinator:
             hardware=hardware,
             keystore_label=keystore_label,
             activate=activate,
+            password=password,
+            password_hint=password_hint,
         )
         self._state_for(cfg.id)
         return cfg

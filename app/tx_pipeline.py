@@ -480,6 +480,62 @@ def _kaspa_partial_signature_status(pskt: dict) -> tuple[int, int]:
     return have, required
 
 
+def kaspa_draft_signature_status(draft_id: str) -> tuple[int, int]:
+    """Return (have, need) for a Kaspa draft; (0, 1) when not multisig."""
+    try:
+        pskt, _unsigned = load_draft_envelope(draft_id)
+    except Exception:
+        return 0, 1
+    if not pskt:
+        return 0, 1
+    have, need = _kaspa_partial_signature_status(pskt)
+    if need <= 0:
+        return 0, 1
+    return have, need
+
+
+def export_kaspa_handoff_draft(draft_id: str, *, wallet_id: str | None = None) -> dict:
+    """Full draft envelope for Save transaction (includes partialSigs when present)."""
+    data = _load_draft_raw(draft_id)
+    if is_bitcoin_draft(data):
+        raise ValueError("Not a Kaspa draft")
+    pskt, unsigned = load_draft_envelope(draft_id)
+    if wallet_id:
+        from .kaspa_generator import enrich_kaspa_multisig_unsigned
+        from .wallet_store import get_wallet
+
+        cfg = get_wallet(wallet_id)
+        if cfg:
+            unsigned = ensure_unsigned_has_kpub(unsigned, cfg.kpub)
+            unsigned = enrich_kaspa_multisig_unsigned(unsigned, cfg)
+    have, need = _kaspa_partial_signature_status(pskt) if pskt else (0, 1)
+    env = draft_envelope(pskt, unsigned) if pskt else {"format": DRAFT_FORMAT, "unsigned": unsigned}
+    if isinstance(data.get("pskts"), list) and data["pskts"]:
+        env["pskts"] = data["pskts"]
+        env["pskb_hex"] = data.get("pskb_hex")
+    if isinstance(data.get("summary"), dict):
+        env["summary"] = data["summary"]
+    env["signatures_loaded"] = have
+    env["signatures_required"] = need
+    env["draft_id"] = draft_id
+    return env
+
+
+def strip_ready_to_unsigned(ready: dict) -> dict:
+    """Copy a broadcast-ready v2 tx into an unsigned draft shape (clear signature scripts)."""
+    import copy
+
+    unsigned = copy.deepcopy(ready)
+    for inp in unsigned.get("inputs") or []:
+        if isinstance(inp, dict):
+            inp.pop("signature_script", None)
+            inp.pop("sig_hex", None)
+    unsigned.pop("seedpass_signed", None)
+    unsigned.pop("signatures", None)
+    attach_unsigned_draft_hash(unsigned)
+    return unsigned
+
+
 def sweep_qr_for_draft_index(
     draft_id: str,
     index: int,
@@ -959,13 +1015,20 @@ def load_btc_draft(draft_id: str, index: int = 0) -> tuple[bytes, dict]:
 
 
 def export_btc_draft(draft_id: str) -> dict:
-    from .bitcoin_psbt import BTC_DRAFT_FORMAT
+    from .bitcoin_psbt import (
+        BTC_DRAFT_FORMAT,
+        psbt_from_base64,
+        psbt_is_finalizable,
+        psbt_signature_progress,
+    )
 
     data = _load_draft_raw(draft_id)
     if not is_bitcoin_draft(data):
         raise ValueError("Draft is not a Bitcoin PSBT")
     b64_list = btc_psbt_base64_list(data)
     summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+    first = psbt_from_base64(b64_list[0])
+    have, need = psbt_signature_progress(first)
     return {
         "draft_id": draft_id,
         "unsigned": summary,
@@ -976,12 +1039,20 @@ def export_btc_draft(draft_id: str) -> dict:
         "format": BTC_DRAFT_FORMAT,
         "coin": "bitcoin",
         "is_sweep": bool(data.get("is_sweep")) or len(b64_list) > 1,
+        "signatures_loaded": have,
+        "signatures_required": need,
+        "signing_complete": psbt_is_finalizable(first),
     }
 
 
 def import_btc_unsigned(unsigned: dict) -> tuple[str, bytes, int]:
     """Persist imported Bitcoin PSBT draft; return (draft_id, first_psbt_bytes, count)."""
-    from .bitcoin_psbt import BTC_DRAFT_FORMAT, psbt_from_base64, psbt_to_base64
+    from .bitcoin_psbt import (
+        BTC_DRAFT_FORMAT,
+        psbt_from_base64,
+        psbt_to_base64,
+        summary_from_psbt,
+    )
 
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
     draft_id = str(uuid.uuid4())
@@ -1008,9 +1079,14 @@ def import_btc_unsigned(unsigned: dict) -> tuple[str, bytes, int]:
     else:
         raise ValueError("Bitcoin import requires psbt_base64 or psbts")
 
+    first = psbt_from_base64(b64_list[0])
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    if not summary or not summary.get("to_address"):
+        payload["summary"] = {**summary_from_psbt(first), **(summary or {})}
+
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
-    return draft_id, psbt_from_base64(b64_list[0]), len(b64_list)
+    return draft_id, first, len(b64_list)
 
 
 def save_sweep_draft_from_build_btc(
@@ -1107,28 +1183,82 @@ def btc_sweep_qr_for_draft_index(
 
 
 def merge_signed_btc_for_draft(draft_id: str, signed: dict) -> dict:
-    from .bitcoin_psbt import psbt_to_base64, signed_psbt_bytes
+    from .bitcoin_psbt import (
+        combine_psbts,
+        psbt_from_base64,
+        psbt_is_finalizable,
+        psbt_signature_progress,
+        psbt_to_base64,
+        signed_psbt_bytes,
+    )
 
-    _psbt_raw, summary = load_btc_draft(draft_id)
-    signed_raw = signed_psbt_bytes(signed)
+    data = _load_draft_raw(draft_id)
+    if not is_bitcoin_draft(data):
+        raise ValueError("Draft is not a Bitcoin PSBT")
+    base = psbt_from_base64(btc_psbt_base64_list(data)[0])
+    incoming = signed_psbt_bytes(signed)
+    # Same PSBT bytes (re-load) — treat as update; otherwise combine partials.
+    try:
+        combined = combine_psbts(base, incoming)
+    except ValueError:
+        # Incoming may already be the full combined PSBT (handoff file).
+        if psbt_is_finalizable(incoming) or len(incoming) >= len(base):
+            combined = incoming
+        else:
+            raise
+    _update_btc_draft_psbt(draft_id, combined)
+    summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+    have, need = psbt_signature_progress(combined)
+    if not psbt_is_finalizable(combined):
+        raise ValueError(
+            f"Partial Bitcoin multisig signature saved ({have}/{need}). "
+            "Scan or load the next cosigner signature, or Save transaction and pass the file to the next signer."
+        )
     return {
         "format": "bitcoin_psbt_ready",
         "coin": "bitcoin",
-        "psbt_base64": psbt_to_base64(signed_raw),
+        "psbt_base64": psbt_to_base64(combined),
         "summary": summary,
     }
 
 
+def _update_btc_draft_psbt(draft_id: str, psbt_bytes: bytes) -> None:
+    from .bitcoin_psbt import psbt_to_base64
+
+    path = DRAFTS_DIR / f"{draft_id}.json"
+    data = _load_draft_raw(draft_id)
+    b64 = psbt_to_base64(psbt_bytes)
+    data["psbt_base64"] = b64
+    if isinstance(data.get("psbts"), list) and data["psbts"]:
+        data["psbts"][0] = b64
+    else:
+        data["psbts"] = [b64]
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
 async def broadcast_btc_signed(draft_id: str, signed: dict, on_progress=None) -> str:
-    from .bitcoin_psbt import broadcast_raw_tx, finalize_signed_psbt, signed_psbt_bytes
+    from .bitcoin_psbt import (
+        broadcast_raw_tx,
+        combine_psbts,
+        finalize_signed_psbt,
+        psbt_from_base64,
+        signed_psbt_bytes,
+    )
 
     def progress(msg: str) -> None:
         if on_progress:
             on_progress(msg)
 
-    signed_raw = signed_psbt_bytes(signed)
+    data = _load_draft_raw(draft_id)
+    draft_raw = psbt_from_base64(btc_psbt_base64_list(data)[0])
+    incoming = signed_psbt_bytes(signed)
+    try:
+        combined = combine_psbts(draft_raw, incoming)
+    except ValueError:
+        combined = incoming
     progress("Finalizing PSBT…")
-    raw_tx = finalize_signed_psbt(signed_raw)
+    raw_tx = finalize_signed_psbt(combined)
     progress("Broadcasting to Bitcoin mainnet…")
     return await broadcast_raw_tx(raw_tx)
 

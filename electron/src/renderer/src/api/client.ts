@@ -102,6 +102,8 @@ export class APIClient {
     account?: number
     hardware?: string
     keystore_label?: string
+    password?: string
+    password_hint?: string
   }): Promise<WalletDTO> {
     const res = await this.post<WalletSaveResponse>('/api/wallets', {
       scan_limit: 30,
@@ -139,6 +141,42 @@ export class APIClient {
     return res.wallet
   }
 
+  async unlockWallet(id: string, password: string): Promise<WalletDTO> {
+    const res = await this.post<WalletSaveResponse>(`/api/wallets/${id}/unlock`, { password })
+    if (!res.wallet) throw new APIError('Missing wallet in response')
+    return res.wallet
+  }
+
+  async lockWallet(id: string): Promise<WalletDTO> {
+    const res = await this.post<WalletSaveResponse>(`/api/wallets/${id}/lock`, {})
+    if (!res.wallet) throw new APIError('Missing wallet in response')
+    return res.wallet
+  }
+
+  async encryptWallet(id: string, password: string, passwordHint?: string): Promise<WalletDTO> {
+    const res = await this.post<WalletSaveResponse>(`/api/wallets/${id}/encrypt`, {
+      password,
+      ...(passwordHint != null ? { password_hint: passwordHint } : {}),
+    })
+    if (!res.wallet) throw new APIError('Missing wallet in response')
+    return res.wallet
+  }
+
+  async changeWalletPassword(
+    id: string,
+    currentPassword: string,
+    newPassword: string,
+    passwordHint?: string,
+  ): Promise<WalletDTO> {
+    const res = await this.post<WalletSaveResponse>(`/api/wallets/${id}/change-password`, {
+      current_password: currentPassword,
+      new_password: newPassword,
+      ...(passwordHint != null ? { password_hint: passwordHint } : {}),
+    })
+    if (!res.wallet) throw new APIError('Missing wallet in response')
+    return res.wallet
+  }
+
   async parseDescriptor(descriptor: string, label = 'Descriptor wallet'): Promise<DescriptorParseResponse> {
     return this.post('/api/descriptor/parse', { descriptor, label, activate: false })
   }
@@ -148,12 +186,16 @@ export class APIClient {
     label: string,
     scanLimit = 30,
     activate = true,
+    password?: string,
+    passwordHint?: string,
   ): Promise<WalletDTO> {
     const res = await this.post<WalletSaveResponse>('/api/wallets/descriptor', {
       descriptor,
       label,
       scan_limit: scanLimit,
       activate,
+      ...(password ? { password } : {}),
+      ...(password && passwordHint ? { password_hint: passwordHint } : {}),
     })
     if (!res.wallet) throw new APIError('Missing wallet in response')
     return res.wallet
@@ -563,6 +605,17 @@ export class APIClient {
     const res = await fetch(`${this.serverBaseURL}/api/wallets/${walletId}/export`)
     if (!res.ok) throw new APIError(await res.text(), res.status)
     return res.blob()
+  }
+
+  async importWallet(
+    exportJson: Record<string, unknown>,
+    opts?: { activate?: boolean; password?: string },
+  ): Promise<WalletSaveResponse> {
+    return this.post('/api/wallets/import', {
+      export_json: exportJson,
+      activate: opts?.activate ?? true,
+      password: opts?.password || undefined,
+    })
   }
 
   async walletDescriptor(walletId: string): Promise<DescriptorExportResponse> {
