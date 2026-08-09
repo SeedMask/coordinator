@@ -69,3 +69,7 @@ See [SECURITY.md](./SECURITY.md).
 ## Disclaimer
 
 THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND. SeedMask Coordinator is experimental. You are solely responsible for your keys, backups, and funds. Nothing in this repository is financial, legal, or investment advice.
+
+**Ledger**, **OneKey**, and other third-party names or logos are trademarks of their respective owners. They appear only to identify supported devices. SeedMask is **not affiliated with, sponsored by, or endorsed by** Ledger, OneKey, or those owners.
+
+Full trademark and product notices: [seedmask.io/disclaimer](https://seedmask.io/disclaimer).
