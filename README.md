@@ -10,7 +10,7 @@ Watch-only desktop companion for [SeedMask](https://seedmask.io) hardware wallet
 
 ## Status
 
-**Early / public alpha.** Not security audited.
+**Early public release.** Not security audited.
 
 Treat builds as **pre-release**. Do **not** rely on this software for large amounts of funds. Prefer verifying downloads on [seedmask.io/app](https://seedmask.io/app).
 
@@ -68,7 +68,7 @@ See [SECURITY.md](./SECURITY.md).
 
 ## Disclaimer
 
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND. SeedMask Coordinator is experimental. You are solely responsible for your keys, backups, and funds. Nothing in this repository is financial, legal, or investment advice.
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND. SeedMask Coordinator is an early public release and has not completed a third-party security audit. You are solely responsible for your keys, backups, and funds. Prefer verifying downloads on [seedmask.io/app](https://seedmask.io/app). Nothing in this repository is financial, legal, or investment advice.
 
 **Ledger**, **OneKey**, and other third-party names or logos are trademarks of their respective owners. They appear only to identify supported devices. SeedMask is **not affiliated with, sponsored by, or endorsed by** Ledger, OneKey, or those owners.
 
