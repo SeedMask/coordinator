@@ -18,3 +18,5 @@ Electron companion for **SeedMask** hardware wallets — Kaspa and Bitcoin mainn
 | PSKT round-trip test | `bash run_kaspa_pskt_roundtrip.sh` |
 
 Signing stays on SeedMask. This app never sees your seed.
+
+SeedMask Coordinator is early software and has not completed a public security audit.
