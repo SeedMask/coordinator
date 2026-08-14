@@ -1,4 +1,4 @@
-"""Kaspa tx v0 Schnorr sighash (matches rusty-kaspa / seedpass_kaspa_sighash.c)."""
+"""Kaspa tx v0 Schnorr sighash (matches rusty-kaspa / seedmask_kaspa_sighash.c)."""
 
 from __future__ import annotations
 

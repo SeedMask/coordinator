@@ -322,12 +322,17 @@ export interface NetworkSettingsSaveResponse {
   settings: NetworkSettingsDTO
 }
 
-export interface BitcoinConnectionTestResponse {
+export interface ConnectionTestResponse {
   ok: boolean
   mode: string
   summary: string
   steps: string[]
 }
+
+/** @deprecated Prefer ConnectionTestResponse — same shape for Bitcoin and Kaspa. */
+export type BitcoinConnectionTestResponse = ConnectionTestResponse
+
+export type KaspaConnectionTestResponse = ConnectionTestResponse
 
 export interface FeeEstimateResponse {
   fee_sompi: number

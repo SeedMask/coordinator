@@ -62,10 +62,15 @@ export function dedupeWalletTransactions(txs: WalletTxDTO[], chain: CoinChain): 
           : (tx.accepting_block_blue_score ?? 0) > 0
             ? tx.accepting_block_blue_score
             : newer.accepting_block_blue_score ?? other.accepting_block_blue_score
+      const feeSompi = Math.max(
+        Number(newer.fee_sompi ?? newer.fee_sats ?? 0) || 0,
+        Number(other.fee_sompi ?? other.fee_sats ?? 0) || 0,
+      )
       byId.set(key, {
         ...newer,
         confirmations: Math.max(prevConf, nextConf),
         accepting_block_blue_score: frozenAccepting,
+        ...(feeSompi > 0 ? { fee_sompi: feeSompi, fee_sats: feeSompi } : {}),
       })
     }
     for (const alias of txIdAliases(tid)) {

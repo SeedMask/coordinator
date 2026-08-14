@@ -1,4 +1,4 @@
-"""Build unsigned QR, merge signatures, broadcast — wraps SeedPass tools."""
+"""Build unsigned QR, merge signatures, broadcast — wraps SeedMask tools."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 
 def _find_tools_dir() -> Path:
-    """SeedPass_UI_Shell/tools in dev; bundled as coordinator/tools inside .app."""
+    """SeedMask Firmware/tools in dev; bundled as coordinator/tools inside .app."""
     coord = Path(__file__).resolve().parent.parent
     bundled = coord / "tools"
     if bundled.is_dir():
@@ -138,7 +138,7 @@ def qr_png_base64(payload_text: str, scale: int = 8) -> str:
     import qrcode
     from PIL import Image
 
-    # L + moderate scale: faster encode, still scannable on SeedPass camera
+    # L + moderate scale: faster encode, still scannable on SeedMask camera
     qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=max(4, scale))
     qr.add_data(payload_text)
     qr.make(fit=True)
@@ -530,7 +530,7 @@ def strip_ready_to_unsigned(ready: dict) -> dict:
         if isinstance(inp, dict):
             inp.pop("signature_script", None)
             inp.pop("sig_hex", None)
-    unsigned.pop("seedpass_signed", None)
+    unsigned.pop("seedmask_signed", None)
     unsigned.pop("signatures", None)
     attach_unsigned_draft_hash(unsigned)
     return unsigned
@@ -680,7 +680,7 @@ def validate_bitcoin_address(addr: str) -> str:
 
 
 def _address_script_check(addr: str) -> str:
-    """Normalize, Kaspa SDK checksum, then Schnorr P2PK script decode (SeedPass build)."""
+    """Normalize, Kaspa SDK checksum, then Schnorr P2PK script decode (SeedMask build)."""
     from kaspa import Address
 
     addr = normalize_kaspa_address(addr)

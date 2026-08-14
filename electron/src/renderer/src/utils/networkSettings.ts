@@ -209,11 +209,23 @@ export function applyKaspaMode(mode: KaspaRpcMode, draft: NetworkSettingsDTO): N
   if (mode === 'resolver') {
     next.kaspa.rpc_url = ''
     next.kaspa.history_mode = 'public'
-  } else if (previousMode !== 'custom' && resolveKaspaHistoryMode(next.kaspa) === 'public') {
-    // Own-node users expect no address queries to third parties unless they opt in.
-    next.kaspa.history_mode = 'disabled'
+  } else {
+    if (!next.kaspa.rpc_url.trim()) {
+      next.kaspa.rpc_url = 'ws://'
+    }
+    if (previousMode !== 'custom' && resolveKaspaHistoryMode(next.kaspa) === 'public') {
+      // Own-node users expect no address queries to third parties unless they opt in.
+      next.kaspa.history_mode = 'disabled'
+    }
   }
   return next
+}
+
+export function isKaspaCustomRpcUrlReady(url: string): boolean {
+  const trimmed = (url || '').trim()
+  if (!/^wss?:\/\//i.test(trimmed)) return false
+  const rest = trimmed.replace(/^wss?:\/\//i, '').trim()
+  return rest.length > 0
 }
 
 /** Fill missing Bitcoin endpoint fields before save/test (avoids backend 422). */
@@ -264,22 +276,13 @@ export function completeBitcoinSettings(
   return merged
 }
 
-export function sanitizedForSave(settings: NetworkSettingsDTO, savedSnapshot: NetworkSettingsDTO | null): NetworkSettingsDTO {
+export function sanitizedForSave(settings: NetworkSettingsDTO, _savedSnapshot: NetworkSettingsDTO | null): NetworkSettingsDTO {
   const next = structuredClone(settings)
   if (resolveBitcoinServerMode(next.bitcoin.server_mode) === 'bitcoin_core') {
     next.bitcoin.core_use_ssl = false
   }
-  if (
-    resolveKaspaRpcMode(next.kaspa) === 'custom' &&
-    !next.kaspa.rpc_url.trim()
-  ) {
-    if (savedSnapshot) {
-      next.kaspa = { ...savedSnapshot.kaspa }
-    } else {
-      next.kaspa.rpc_mode = 'resolver'
-      next.kaspa.rpc_url = ''
-    }
-  }
+  // Incomplete own-node URLs are held in the draft and skipped by the editor save path.
+  // Do not silently revert custom mode / history choices back to the last saved snapshot.
   return next
 }
 
@@ -309,6 +312,44 @@ export function bitcoinHubLabel(bitcoin: BitcoinNetworkSettingsDTO): string {
     case 'electrum':
       return 'Private Electrum'
   }
+}
+
+export function kaspaHubLabel(kaspa: KaspaNetworkSettingsDTO): string {
+  return resolveKaspaRpcMode(kaspa) === 'custom' ? 'Your own node' : 'Automatic'
+}
+
+/** Active-chain connection preference for sidebar status (never both chains). */
+export function chainConnectionLabel(
+  settings: NetworkSettingsDTO | null | undefined,
+  chain: CoinChainFilter,
+): string {
+  if (!settings) return chain === 'kaspa' ? 'Kaspa mainnet' : 'Bitcoin mainnet'
+  return chain === 'kaspa' ? kaspaHubLabel(settings.kaspa) : bitcoinHubLabel(settings.bitcoin)
+}
+
+/** Kaspa-only history mode line for the sidebar status (empty on Bitcoin). */
+export function chainHistoryStatusLabel(
+  settings: NetworkSettingsDTO | null | undefined,
+  chain: CoinChainFilter,
+): string {
+  if (!settings || chain !== 'kaspa') return ''
+  switch (resolveKaspaHistoryMode(settings.kaspa)) {
+    case 'disabled':
+      return 'History off'
+    case 'custom':
+      return 'Private history'
+    case 'public':
+      return 'Public history'
+  }
+}
+
+/** Endpoint / history detail for the active chain only. */
+export function chainConnectionDetail(
+  settings: NetworkSettingsDTO | null | undefined,
+  chain: CoinChainFilter,
+): string {
+  if (!settings) return ''
+  return chain === 'kaspa' ? kaspaHubDetail(settings.kaspa) : bitcoinHubDetail(settings.bitcoin)
 }
 
 export function bitcoinHubDetail(bitcoin: BitcoinNetworkSettingsDTO): string {

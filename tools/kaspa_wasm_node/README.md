@@ -5,7 +5,7 @@ Official **kaspa-wallet-pskt** parse validation for the Coordinator.
 ## Setup (once)
 
 ```bash
-bash SeedPass_UI_Shell/tools/kaspa_wasm_node/setup_kaspa_wasm.sh
+bash SeedMask Firmware/tools/kaspa_wasm_node/setup_kaspa_wasm.sh
 ```
 
 Requires `curl`, `unzip`, and **Node.js** (`node` on PATH, or Cursor’s bundled node).

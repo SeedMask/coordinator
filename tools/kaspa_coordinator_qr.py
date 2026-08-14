@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kaspa mainnet coordinator JSON v2 QR for SeedPass on-device signing.
+"""Kaspa mainnet coordinator JSON v2 QR for SeedMask on-device signing.
 
 Usage:
   python3 kaspa_coordinator_qr.py --sample-test --png ~/kaspa_tx_test.png

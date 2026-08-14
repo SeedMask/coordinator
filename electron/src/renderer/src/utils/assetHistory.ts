@@ -23,6 +23,13 @@ export interface AssetFlowEvent {
   id: string
 }
 
+/** Network fee in whole-coin units (KAS / BTC). 0 when unknown. */
+export function txFeeCoin(tx: WalletTxDTO): number {
+  const raw = Number(tx.fee_sompi ?? tx.fee_sats ?? 0)
+  if (!Number.isFinite(raw) || raw <= 0) return 0
+  return raw / 1e8
+}
+
 export interface AssetBalanceStep {
   eventIndex: number
   balance: number
@@ -120,14 +127,13 @@ export function flowEvents(
     const id = flowEventId(tx, index)
     if (seen.has(id)) continue
     seen.add(id)
-    const coinAmount = Math.abs(txAmount(tx))
-    const internal = txIsInternalTransfer(tx, walletAddresses, chain)
-    if (internal) continue
+    // Self-transfers stay in the wallet — omit from In / Out / chart bars.
+    if (txIsInternalTransfer(tx, walletAddresses, chain)) continue
     events.push({
       tx,
       index: events.length,
       date,
-      coinAmount,
+      coinAmount: Math.abs(txAmount(tx)),
       fiatAmount: fiatByTxId[txId(tx) || id],
       isInflow: txIsReceived(tx),
       id,
@@ -136,26 +142,71 @@ export function flowEvents(
   return events
 }
 
+/** Network fees paid in-period, including self-sends (not shown as Out). */
+export function sendFeesInPeriod(
+  transactions: WalletTxDTO[],
+  since: Date | null,
+  chain: CoinChain,
+): number {
+  return walletTransactionsInPeriod(transactions, since, chain).reduce((sum, tx) => {
+    if (txIsReceived(tx)) return sum
+    return sum + txFeeCoin(tx)
+  }, 0)
+}
+
 export function balanceSeries(
   events: AssetFlowEvent[],
   currentBalance: number,
-  _allTransactions: WalletTxDTO[] = [],
+  allTransactions: WalletTxDTO[] = [],
   periodStart: Date | null = null,
-  _walletAddresses: ReadonlySet<string> = new Set(),
-  _chain: CoinChain = 'kaspa',
+  walletAddresses: ReadonlySet<string> = new Set(),
+  chain: CoinChain = 'kaspa',
 ): AssetBalanceSeries {
   const closing = Math.max(0, currentBalance)
-  const periodNet = events.reduce(
-    (partial, event) => partial + (event.isInflow ? event.coinAmount : -event.coinAmount),
-    0,
-  )
+
+  // Self-send fees are not on chart events but still leave the wallet.
+  const internalFees: Array<{ time: number; fee: number }> = []
+  for (const tx of allTransactions) {
+    const date = eventDate(tx)
+    if (!date || (periodStart && !isInPeriod(date, periodStart))) continue
+    if (txIsReceived(tx)) continue
+    if (!txIsInternalTransfer(tx, walletAddresses, chain)) continue
+    const fee = txFeeCoin(tx)
+    if (fee > 0) internalFees.push({ time: date.getTime(), fee })
+  }
+  internalFees.sort((a, b) => a.time - b.time)
+
+  const externalNet = events.reduce((partial, event) => {
+    const flow = event.isInflow ? event.coinAmount : -event.coinAmount
+    const fee = event.isInflow ? 0 : txFeeCoin(event.tx)
+    return partial + flow - fee
+  }, 0)
+  const internalFeeTotal = internalFees.reduce((s, row) => s + row.fee, 0)
+  const periodNet = externalNet - internalFeeTotal
   const opening = periodStart === null ? 0 : Math.max(0, closing - periodNet)
 
   let running = opening
+  let feeIdx = 0
   const steps: AssetBalanceStep[] = []
   for (const event of events) {
-    running = Math.max(0, running + (event.isInflow ? event.coinAmount : -event.coinAmount))
+    const t = event.date.getTime()
+    while (feeIdx < internalFees.length && internalFees[feeIdx]!.time <= t) {
+      running = Math.max(0, running - internalFees[feeIdx]!.fee)
+      feeIdx += 1
+    }
+    const fee = event.isInflow ? 0 : txFeeCoin(event.tx)
+    running = Math.max(0, running + (event.isInflow ? event.coinAmount : -event.coinAmount) - fee)
     steps.push({ eventIndex: event.index, balance: running })
+  }
+  while (feeIdx < internalFees.length) {
+    running = Math.max(0, running - internalFees[feeIdx]!.fee)
+    feeIdx += 1
+  }
+  if (steps.length > 0) {
+    steps[steps.length - 1] = {
+      eventIndex: steps[steps.length - 1]!.eventIndex,
+      balance: running,
+    }
   }
 
   if (steps.length > 0 && Math.abs(steps[steps.length - 1]!.balance - closing) > 1e-10) {

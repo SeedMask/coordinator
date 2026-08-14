@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify SeedPass kaspa_address.c matches rusty-kaspa bech32 checksum."""
+"""Verify SeedMask kaspa_address.c matches rusty-kaspa bech32 checksum."""
 
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ def main() -> int:
     want = encode_kaspa_official("kaspa", 0, x)
     got = c_encode(x)
     print("official:", want)
-    print("seedpass:", got)
+    print("seedmask:", got)
     if got != want:
         print("MISMATCH", file=sys.stderr)
         return 1

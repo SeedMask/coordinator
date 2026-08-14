@@ -99,7 +99,7 @@ Keep on desktop as Python until mobile ships; dual-run acceptable short term.
 
 | Asset | Tag |
 |-------|-----|
-| `macos/SeedPassCoordinator/**/*.swift` | **REPLACE-UI** |
+| `macos/SeedMaskCoordinator/**/*.swift` | **REPLACE-UI** |
 | `macos/build_app.sh`, `bundle_runtime.sh` | **REPLACE-UI** (see `electron/scripts/`) |
 | `coordinator/static/` | **REPLACE-UI** (legacy Kaspa web; reference only) |
 

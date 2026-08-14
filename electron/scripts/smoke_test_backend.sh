@@ -17,9 +17,9 @@ else
   exit 1
 fi
 
-export SEEDPASS_COORDINATOR_ROOT="$COORD"
-export SEEDPASS_COORDINATOR_PORT="$PORT"
-export SEEDPASS_PYTHON="$PY"
+export SEEDMASK_COORDINATOR_ROOT="$COORD"
+export SEEDMASK_COORDINATOR_PORT="$PORT"
+export SEEDMASK_PYTHON="$PY"
 export PYTHONPATH="${COORD}/tools:${PYTHONPATH:-}"
 [[ -x "$RUNTIME/node/bin/node" ]] && export SEEDMASK_NODE="$RUNTIME/node/bin/node"
 [[ -x "$RUNTIME/node/node.exe" ]] && export SEEDMASK_NODE="$RUNTIME/node/node.exe"

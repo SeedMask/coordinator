@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge SeedPass signed QR JSON into the unsigned coordinator JSON.
+"""Merge SeedMask signed QR JSON into the unsigned coordinator JSON.
 
 Usage:
   python3 kaspa_apply_signatures.py unsigned.json signed_from_device.json
@@ -45,7 +45,7 @@ def merge(unsigned: dict, signed: dict) -> dict:
             raise ValueError(f"input_index {idx} out of range (have {len(inputs)} inputs)")
         inputs[idx]["signature_script"] = sig_hex
     merged["inputs"] = inputs
-    merged["seedpass_signed"] = True
+    merged["seedmask_signed"] = True
     return merged
 
 

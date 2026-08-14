@@ -109,10 +109,10 @@ def main() -> int:
         draft_id = save_btc_draft(psbt_bytes, summary)
         exported = export_btc_draft(draft_id)
         assert exported["psbt_base64"]
-        assert exported["format"] == "seedpass_psbt_draft_v1"
+        assert exported["format"] == "seedmask_psbt_draft_v1"
 
         draft_id2, raw2, count = import_btc_unsigned(
-            {"format": "seedpass_psbt_draft_v1", "coin": "bitcoin", "psbt_base64": exported["psbt_base64"]}
+            {"format": "seedmask_psbt_draft_v1", "coin": "bitcoin", "psbt_base64": exported["psbt_base64"]}
         )
         assert count == 1
         assert raw2.startswith(PSBT.MAGIC)

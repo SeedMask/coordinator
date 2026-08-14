@@ -30,7 +30,7 @@ from .kpub_parse import (
 )
 from .wallet_store import WalletConfig, effective_wallet_account
 
-BTC_DRAFT_FORMAT = "seedpass_psbt_draft_v1"
+BTC_DRAFT_FORMAT = "seedmask_psbt_draft_v1"
 _SIGHASH_ALL = 1
 _RBF_SEQUENCE = 0xFFFFFFFD
 _FINAL_SEQUENCE = 0xFFFFFFFF

@@ -76,8 +76,8 @@ export class BackendManager {
     const workDir = writableLogsDir()
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      SEEDPASS_COORDINATOR_PORT: String(this.port),
-      SEEDPASS_COORDINATOR_ROOT: root,
+      SEEDMASK_COORDINATOR_PORT: String(this.port),
+      SEEDMASK_COORDINATOR_ROOT: root,
       PYTHONUNBUFFERED: '1',
       PYTHONDONTWRITEBYTECODE: '1',
       PYTHONPYCACHEPREFIX: join(workDir, 'pycache'),

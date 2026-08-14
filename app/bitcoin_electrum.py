@@ -77,20 +77,45 @@ async def test_connection() -> dict[str, Any]:
     steps: list[str] = []
     s = _settings()
     proto = "ssl" if s.electrum_use_ssl else "tcp"
-    steps.append(f"Connecting to {proto}://{s.electrum_host}:{int(s.electrum_port)}")
-    version = await _rpc("server.version", ["SeedMask Coordinator", "1.4"])
-    if isinstance(version, list) and version:
-        steps.append(f"Server version: {version[0]}")
-    else:
-        steps.append(f"Server version: {version}")
-    await _rpc("server.ping", [])
-    steps.append("Ping OK")
+    target = f"{proto}://{s.electrum_host}:{int(s.electrum_port)}"
+    steps.append(f"Connecting to {target}")
+    try:
+        version = await _rpc("server.version", ["SeedMask Coordinator", "1.4"])
+        if isinstance(version, list) and version:
+            steps.append(f"Server version: {version[0]}")
+        else:
+            steps.append(f"Server version: {version}")
+        await _rpc("server.ping", [])
+        steps.append("Ping OK")
+    except Exception as exc:
+        msg = _describe_electrum_error(exc, target=target)
+        return {
+            "ok": False,
+            "mode": "electrum",
+            "summary": msg,
+            "steps": [*steps, msg],
+        }
     return {
         "ok": True,
         "mode": "electrum",
-        "summary": steps[-1],
+        "summary": "Electrum server reachable",
         "steps": steps,
     }
+
+
+def _describe_electrum_error(exc: BaseException, *, target: str) -> str:
+    msg = str(exc).strip()
+    low = msg.lower()
+    if isinstance(exc, asyncio.TimeoutError) or "timed out" in low or "timeout" in low:
+        return f"Timed out reaching {target} — is the Electrum server running?"
+    if "connection refused" in low or "connect call failed" in low:
+        return (
+            f"Connection refused at {target} — check host/port and whether the server is listening. "
+            "SSL servers are often on 50002; plain TCP on 50001."
+        )
+    if "ssl" in low or "certificate" in low:
+        return f"SSL error talking to {target} — try toggling Use SSL to match the server."
+    return msg or type(exc).__name__
 
 
 async def fetch_address_utxos(address: str, cfg: WalletConfig | None = None) -> list[dict]:

@@ -1,1 +1,1 @@
-# SeedPass Kaspa coordinator (local web UI)
+# SeedMask Kaspa coordinator (local web UI)

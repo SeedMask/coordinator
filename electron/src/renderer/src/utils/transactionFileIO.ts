@@ -93,7 +93,7 @@ export function unwrapUnsignedImport(parsed: unknown): unknown {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return parsed
   const dict = parsed as Record<string, unknown>
   const format = String(dict.format ?? '')
-  if (format === 'seedpass_pskt_draft_v1' || format === 'seedpass_psbt_draft_v1') return dict
+  if (format === 'seedmask_pskt_draft_v1' || format === 'seedmask_psbt_draft_v1') return dict
   if (dict.pskt != null || (typeof dict.pskt_hex === 'string' && dict.pskt_hex.trim())) return dict
   if (typeof dict.psbt_base64 === 'string' && dict.psbt_base64.trim()) return dict
   if (dict.inputs == null && dict.unsigned != null) return dict.unsigned
@@ -102,7 +102,7 @@ export function unwrapUnsignedImport(parsed: unknown): unknown {
 
 export function bitcoinDraftEnvelope(psbtBase64: string): Record<string, unknown> {
   return {
-    format: 'seedpass_psbt_draft_v1',
+    format: 'seedmask_psbt_draft_v1',
     coin: 'bitcoin',
     psbt_base64: psbtBase64,
     psbts: [psbtBase64],

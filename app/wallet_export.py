@@ -16,8 +16,11 @@ from .wallet_store import (
     _disk_dict_for_wallet,
     _unlocked,
     add_wallet,
+    find_duplicate_watch_wallet,
+    find_wallet_by_kpub,
     get_wallet,
     load_store,
+    remove_wallet,
     save_store,
     unlock_wallet,
 )
@@ -115,9 +118,16 @@ def _import_sealed_wallet(
         raise ValueError("Not a sealed SeedMask wallet")
 
     pw = (password or "").strip()
+    incoming_kpub = ""
     if pw:
         # Verify before committing so a wrong password does not leave a half-imported wallet.
-        decrypt_secrets(shell.encrypted_blob, pw)
+        secrets = decrypt_secrets(shell.encrypted_blob, pw)
+        incoming_kpub = str(secrets.get("kpub") or "").strip()
+        if incoming_kpub and find_wallet_by_kpub(incoming_kpub, coin=shell.coin):
+            raise ValueError("This watch-only key is already imported for this coin")
+
+    if find_duplicate_watch_wallet(shell):
+        raise ValueError("This watch-only key is already imported for this coin")
 
     shell.id = str(uuid.uuid4())
     # Secrets stay in the blob only.
@@ -138,7 +148,11 @@ def _import_sealed_wallet(
     save_store(store)
 
     if pw:
-        return unlock_wallet(shell.id, pw)
+        unlocked = unlock_wallet(shell.id, pw)
+        if find_duplicate_watch_wallet(unlocked, skip_id=unlocked.id):
+            remove_wallet(shell.id)
+            raise ValueError("This watch-only key is already imported for this coin")
+        return unlocked
     return get_wallet(shell.id) or shell
 
 
@@ -152,6 +166,9 @@ def import_wallet_bundle(
     cfg_preview = WalletConfig.from_dict(wallet_raw)
 
     if cfg_preview.encrypted and cfg_preview.encrypted_blob:
+        dup = find_duplicate_watch_wallet(cfg_preview)
+        if dup:
+            raise ValueError("This watch-only key is already imported for this coin")
         saved = _import_sealed_wallet(wallet_raw, activate=activate, password=password)
     else:
         saved = add_wallet(

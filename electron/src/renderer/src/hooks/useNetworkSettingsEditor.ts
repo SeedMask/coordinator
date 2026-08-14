@@ -16,6 +16,7 @@ import {
   resolveKaspaHistoryMode,
   resolveKaspaRpcMode,
   completeBitcoinSettings,
+  isKaspaCustomRpcUrlReady,
   sanitizedForSave,
   settingsEqual,
 } from '@renderer/utils/networkSettings'
@@ -73,6 +74,18 @@ export function useNetworkSettingsEditor() {
       const source = payloadOverride ?? draftRef.current
       const snapshot = savedSnapshotRef.current
       if (!source || !defaults) return
+
+      // Own-node with an empty/incomplete WebSocket URL: keep the draft (including history
+      // choices) local until the user finishes the address. Do not revert or block the UI.
+      if (
+        resolveKaspaRpcMode(source.kaspa) === 'custom' &&
+        !isKaspaCustomRpcUrlReady(source.kaspa.rpc_url)
+      ) {
+        setSavePhase('idle')
+        setSaveError(null)
+        return
+      }
+
       setSaveError(null)
       setSavePhase('pending')
       setLastSaveContext(context ?? null)
@@ -196,7 +209,10 @@ export function useNetworkSettingsEditor() {
         }
         return next
       }
-      if (mode === 'custom' && !(draft.kaspa.history_api_base || '').trim()) {
+      const ownNodeIncomplete =
+        resolveKaspaRpcMode(draft.kaspa) === 'custom' && !isKaspaCustomRpcUrlReady(draft.kaspa.rpc_url)
+      const privateHistoryIncomplete = mode === 'custom' && !(draft.kaspa.history_api_base || '').trim()
+      if (ownNodeIncomplete || privateHistoryIncomplete) {
         setDraft((current) => {
           if (!current) return current
           const next = update(current)

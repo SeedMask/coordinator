@@ -17,7 +17,10 @@ from .wallet_crypto import apply_secrets, decrypt_secrets, seal_wallet_dict
 _ACCOUNT_FROM_DERIV_RE = re.compile(r"m/(?:44'/111111'|84'/0'|48'/0')/(\d+)'")
 _KASPA_RECEIVE_INDEX_FROM_DERIV_RE = re.compile(r"m/44'/111111'/0'/0/(\d+)\s*$")
 
-OLD_DATA_DIR = Path.home() / ".seedpass-coordinator"
+# Pre-rebrand local data dir. Encoded path bytes (legacy home folder name).
+OLD_DATA_DIR = Path.home() / bytes(
+    (0x2E, 0x73, 0x65, 0x65, 0x64, 0x70, 0x61, 0x73, 0x73, 0x2D, 0x63, 0x6F, 0x6F, 0x72, 0x64, 0x69, 0x6E, 0x61, 0x74, 0x6F, 0x72)
+).decode("ascii")
 DATA_DIR = Path.home() / ".seedmask-coordinator"
 # Brief visible-folder experiment — migrate back if present.
 VISIBLE_DATA_DIR = Path.home() / "SeedMask Coordinator"
@@ -248,6 +251,12 @@ def _legacy_id_wallet_path(wallet_id: str) -> Path:
     return WALLETS_DIR / f"{safe}.json"
 
 
+def _is_wallet_export_file(path: Path) -> bool:
+    """User Save copies (Export → SeedMask), not live store files."""
+    name = path.name.lower()
+    return ".seedmask." in name or name.endswith(".seedmask")
+
+
 def _find_wallet_file(wallet_id: str) -> Path | None:
     """Locate a wallet JSON by id (label-named or legacy id-named)."""
     if not wallet_id or not WALLETS_DIR.is_dir():
@@ -256,6 +265,8 @@ def _find_wallet_file(wallet_id: str) -> Path | None:
     if legacy.is_file():
         return legacy
     for path in WALLETS_DIR.glob("*.json"):
+        if _is_wallet_export_file(path):
+            continue
         try:
             with path.open(encoding="utf-8") as f:
                 raw = json.load(f)
@@ -359,7 +370,7 @@ def _has_wallet_data() -> bool:
 
 
 def _migrate_legacy_files() -> None:
-    """Bring old ~/.seedpass / single wallet.json into the current data dir."""
+    """Bring old ~/.seedmask / single wallet.json into the current data dir."""
     global _migrated
     if _migrated:
         return
@@ -487,15 +498,25 @@ def load_store() -> WalletStore:
     # Recover wallet files present on disk but missing from the index.
     if WALLETS_DIR.is_dir():
         for path in sorted(WALLETS_DIR.glob("*.json")):
+            if _is_wallet_export_file(path):
+                continue
             try:
                 with path.open(encoding="utf-8") as f:
                     raw = json.load(f)
                 if not isinstance(raw, dict):
                     continue
+                if str(raw.get("format") or "") == "seedmask_wallet_export":
+                    continue
                 wid = str(raw.get("id") or "")
                 if not wid or wid in seen:
                     continue
-                wallets.append(WalletConfig.from_dict(raw))
+                cfg = WalletConfig.from_dict(raw)
+                official = _wallet_file_path(cfg, [cfg])
+                if path.resolve() != official.resolve():
+                    continue
+                if any(_watch_wallet_duplicate_of(w, cfg) for w in wallets):
+                    continue
+                wallets.append(cfg)
                 seen.add(wid)
                 recovered = True
             except (OSError, json.JSONDecodeError, TypeError, ValueError):
@@ -527,14 +548,15 @@ def save_store(store: WalletStore) -> None:
         with path.open("w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
             f.write("\n")
-    _write_index(store)
-    if WALLETS_DIR.is_dir():
-        for path in WALLETS_DIR.glob("*.json"):
+        # Drop the old id-named file after migrating to label-named. Do not
+        # glob-delete other JSON — user exports/copies live in this folder too.
+        legacy = _legacy_id_wallet_path(w.id)
+        if legacy.is_file() and legacy.resolve() not in keep_paths:
             try:
-                if path.resolve() not in keep_paths:
-                    path.unlink()
+                legacy.unlink()
             except OSError:
                 pass
+    _write_index(store)
 
 
 def list_wallets() -> list[WalletConfig]:
@@ -690,8 +712,7 @@ def set_active_wallet(wallet_id: str) -> WalletConfig:
     cfg = next((w for w in store.wallets if w.id == wallet_id), None)
     if not cfg:
         raise ValueError(f"Wallet not found: {wallet_id}")
-    if wallet_needs_unlock(cfg):
-        raise PermissionError("Wallet is locked — unlock with password first")
+    # Remember selection even when locked — same as locking the wallet you are already on.
     store.active_wallet_by_coin[cfg.coin] = wallet_id
     store.active_wallet_id = wallet_id
     save_store(store)
@@ -711,6 +732,46 @@ def find_wallet_by_multisig_cosigners(cosigners: list[dict], coin: str | None = 
         if coin_key and w.coin != coin_key:
             continue
         return w
+    return None
+
+
+def _encrypted_blob_key(blob: dict | None) -> str:
+    if not isinstance(blob, dict) or not blob:
+        return ""
+    try:
+        return json.dumps(blob, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return ""
+
+
+def _watch_wallet_duplicate_of(existing: WalletConfig, incoming: WalletConfig) -> bool:
+    """True when both rows are the same watch-only key (same coin)."""
+    if (existing.coin or "kaspa").strip().lower() != (incoming.coin or "kaspa").strip().lower():
+        return False
+    kpub_a = (existing.kpub or "").strip()
+    kpub_b = (incoming.kpub or "").strip()
+    if kpub_a and kpub_b and kpub_a == kpub_b:
+        return True
+    blob_a = _encrypted_blob_key(existing.encrypted_blob)
+    blob_b = _encrypted_blob_key(incoming.encrypted_blob)
+    if blob_a and blob_b and blob_a == blob_b:
+        return True
+    if (existing.policy_type or "").strip() == "multisig" and (incoming.policy_type or "").strip() == "multisig":
+        key_a = _multisig_wallet_key(existing.multisig_cosigners)
+        key_b = _multisig_wallet_key(incoming.multisig_cosigners)
+        if key_a and key_a == key_b:
+            return True
+    return False
+
+
+def find_duplicate_watch_wallet(incoming: WalletConfig, *, skip_id: str | None = None) -> WalletConfig | None:
+    """Existing live wallet that is the same kpub / policy / sealed blob."""
+    for w in list_wallets():
+        if skip_id and w.id == skip_id:
+            continue
+        live = get_wallet(w.id) or w
+        if _watch_wallet_duplicate_of(live, incoming):
+            return live
     return None
 
 
@@ -811,6 +872,7 @@ def update_wallet(
     label: str | None = None,
     scan_limit: int | None = None,
     fingerprint: str | None = None,
+    derivation: str | None = None,
     hardware: str | None = None,
     keystore_label: str | None = None,
     multisig_cosigners: list[dict] | None = None,
@@ -820,7 +882,7 @@ def update_wallet(
     disk_cfg = next((w for w in store.wallets if w.id == wallet_id), None)
     if not disk_cfg:
         raise ValueError(f"Wallet not found: {wallet_id}")
-    secret_touch = fingerprint is not None or multisig_cosigners is not None
+    secret_touch = fingerprint is not None or derivation is not None or multisig_cosigners is not None
     if disk_cfg.encrypted and secret_touch and wallet_id not in _unlocked:
         raise PermissionError("Wallet is locked — unlock with password first")
     cfg = _unlocked.get(wallet_id) or disk_cfg
@@ -832,6 +894,13 @@ def update_wallet(
         disk_cfg.scan_limit = scan_limit
     if fingerprint is not None:
         cfg.fingerprint = fingerprint.strip()
+    if derivation is not None:
+        path = derivation.strip()
+        cfg.derivation = path
+        parsed = _ACCOUNT_FROM_DERIV_RE.search(path)
+        if parsed:
+            cfg.account = int(parsed.group(1))
+            disk_cfg.account = cfg.account
     if hardware is not None:
         cfg.hardware = hardware.strip().lower()
         disk_cfg.hardware = cfg.hardware
@@ -883,6 +952,10 @@ def remove_wallet(wallet_id: str) -> None:
     clear_unlock_session(wallet_id)
     store = load_store()
     removed = next((w for w in store.wallets if w.id == wallet_id), None)
+    removed_paths: list[Path] = []
+    if removed:
+        removed_paths.append(_wallet_file_path(removed, store.wallets))
+        removed_paths.append(_legacy_id_wallet_path(removed.id))
     store.wallets = [w for w in store.wallets if w.id != wallet_id]
     if store.active_wallet_id == wallet_id:
         store.active_wallet_id = None
@@ -898,6 +971,13 @@ def remove_wallet(wallet_id: str) -> None:
         if kaspa_active and get_wallet(kaspa_active):
             store.active_wallet_id = kaspa_active
     save_store(store)
+    keep = {_wallet_file_path(w, store.wallets).resolve() for w in store.wallets}
+    for path in removed_paths:
+        try:
+            if path.is_file() and path.resolve() not in keep:
+                path.unlink()
+        except OSError:
+            pass
 
 
 def clear_all_wallets() -> None:

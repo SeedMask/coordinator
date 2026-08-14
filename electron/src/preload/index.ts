@@ -243,4 +243,107 @@ contextBridge.exposeInMainWorld('seedmask', {
     result?: { format: 'bitcoin_psbt'; psbt_base64: string }
     error?: string
   }> => ipcRenderer.invoke('onekey:sign-bitcoin', opts),
+  getUpdaterStatus: (): Promise<{
+    phase: string
+    currentVersion: string
+    availableVersion?: string
+    percent?: number
+    error?: string
+    feed?: string
+    packaged: boolean
+    message?: string
+    demo?: boolean
+    releaseNotes?: string
+    releaseUrl?: string
+  }> => ipcRenderer.invoke('updater:get-status'),
+  checkForUpdates: (): Promise<{
+    phase: string
+    currentVersion: string
+    availableVersion?: string
+    percent?: number
+    error?: string
+    feed?: string
+    packaged: boolean
+    message?: string
+    demo?: boolean
+    releaseNotes?: string
+    releaseUrl?: string
+  }> => ipcRenderer.invoke('updater:check'),
+  downloadUpdate: (): Promise<{
+    phase: string
+    currentVersion: string
+    availableVersion?: string
+    percent?: number
+    error?: string
+    feed?: string
+    packaged: boolean
+    message?: string
+    demo?: boolean
+    releaseNotes?: string
+    releaseUrl?: string
+  }> => ipcRenderer.invoke('updater:download'),
+  installUpdate: (): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('updater:install'),
+  applyUpdate: (): Promise<{
+    phase: string
+    currentVersion: string
+    availableVersion?: string
+    percent?: number
+    error?: string
+    feed?: string
+    packaged: boolean
+    message?: string
+    demo?: boolean
+    releaseNotes?: string
+    releaseUrl?: string
+  }> => ipcRenderer.invoke('updater:apply'),
+  dismissWhatsNew: (): Promise<{
+    phase: string
+    currentVersion: string
+    availableVersion?: string
+    percent?: number
+    error?: string
+    feed?: string
+    packaged: boolean
+    message?: string
+    demo?: boolean
+    releaseNotes?: string
+    releaseUrl?: string
+  }> => ipcRenderer.invoke('updater:dismiss-whats-new'),
+  onUpdaterEvent: (
+    cb: (status: {
+      phase: string
+      currentVersion: string
+      availableVersion?: string
+      percent?: number
+      error?: string
+      feed?: string
+      packaged: boolean
+      message?: string
+      demo?: boolean
+      releaseNotes?: string
+      releaseUrl?: string
+    }) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: IpcRendererEvent,
+      status: {
+        phase: string
+        currentVersion: string
+        availableVersion?: string
+        percent?: number
+        error?: string
+        feed?: string
+        packaged: boolean
+        message?: string
+        demo?: boolean
+        releaseNotes?: string
+        releaseUrl?: string
+      },
+    ) => {
+      cb(status)
+    }
+    ipcRenderer.on('updater:event', handler)
+    return () => ipcRenderer.removeListener('updater:event', handler)
+  },
 })

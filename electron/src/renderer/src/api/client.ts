@@ -12,6 +12,8 @@ import type {
   DraftExportResponse,
   FeeEstimateResponse,
   FinishResponse,
+  KaspaConnectionTestResponse,
+  KaspaNetworkSettingsDTO,
   KpubParseResponse,
   MultisigCosigner,
   NetworkSettingsDTO,
@@ -121,6 +123,7 @@ export class APIClient {
       label?: string
       scan_limit?: number
       fingerprint?: string
+      derivation?: string
       hardware?: string
       keystore_label?: string
       multisig_cosigners?: MultisigCosigner[]
@@ -515,9 +518,11 @@ export class APIClient {
     walletId: string,
     mode: 'hot' | 'discover' | 'deep' = 'hot',
     wait = false,
+    opts?: { historyOnce?: 'public' },
   ): Promise<{ ok: boolean; queued?: boolean } | BalanceResponse> {
+    const once = opts?.historyOnce === 'public' ? '&history_once=public' : ''
     const raw = await this.request<Record<string, unknown>>(
-      `/api/wallets/${walletId}/sync?mode=${encodeURIComponent(mode)}&wait=${wait ? 'true' : 'false'}`,
+      `/api/wallets/${walletId}/sync?mode=${encodeURIComponent(mode)}&wait=${wait ? 'true' : 'false'}${once}`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', timeoutMs: wait ? 300_000 : 15_000 },
     )
     if (wait && raw.balance_sompi != null) {
@@ -598,7 +603,11 @@ export class APIClient {
   }
 
   async testBitcoinConnection(bitcoin: BitcoinNetworkSettingsDTO): Promise<BitcoinConnectionTestResponse> {
-    return this.post('/api/settings/network/test-bitcoin', bitcoin, 12_000)
+    return this.post('/api/settings/network/test-bitcoin', bitcoin, 20_000)
+  }
+
+  async testKaspaConnection(kaspa: KaspaNetworkSettingsDTO): Promise<KaspaConnectionTestResponse> {
+    return this.post('/api/settings/network/test-kaspa', kaspa, 25_000)
   }
 
   async exportWallet(walletId: string): Promise<Blob> {

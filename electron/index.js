@@ -72,7 +72,7 @@ function bundledRuntimeDir() {
   return void 0;
 }
 function findCoordinatorRoot() {
-  const env = process.env.SEEDPASS_COORDINATOR_ROOT?.trim();
+  const env = process.env.SEEDMASK_COORDINATOR_ROOT?.trim();
   if (env && require$$0$1.existsSync(require$$0.join(env, "run_backend.py"))) return env;
   if (isPackagedApp$1()) {
     const packaged = require$$0.join(process.resourcesPath, "coordinator");
@@ -81,7 +81,7 @@ function findCoordinatorRoot() {
   const relativeRoot = require$$0.join(__dirname, "..", "..", "..");
   if (require$$0$1.existsSync(require$$0.join(relativeRoot, "run_backend.py"))) return relativeRoot;
   throw new Error(
-    "Cannot find coordinator backend (run_backend.py). Set SEEDPASS_COORDINATOR_ROOT or run from SeedMask_Coordinator/electron."
+    "Cannot find coordinator backend (run_backend.py). Set SEEDMASK_COORDINATOR_ROOT or run from SeedMask_Coordinator/electron."
   );
 }
 function writableLogsDir() {
@@ -93,7 +93,7 @@ function backendStderrLogPath() {
   return require$$0.join(writableLogsDir(), "backend_stderr.log");
 }
 function resolvePython(coordinatorRoot) {
-  const env = process.env.SEEDPASS_PYTHON?.trim();
+  const env = process.env.SEEDMASK_PYTHON?.trim();
   if (env && canRunPython(env)) return env;
   const venv = process.platform === "win32" ? require$$0.join(coordinatorRoot, ".venv", "Scripts", "python.exe") : require$$0.join(coordinatorRoot, ".venv", "bin", "python3");
   if (require$$0$1.existsSync(venv) && canRunPython(venv)) return venv;
@@ -181,8 +181,8 @@ class BackendManager {
     const workDir = writableLogsDir();
     const env = {
       ...process.env,
-      SEEDPASS_COORDINATOR_PORT: String(this.port),
-      SEEDPASS_COORDINATOR_ROOT: root,
+      SEEDMASK_COORDINATOR_PORT: String(this.port),
+      SEEDMASK_COORDINATOR_ROOT: root,
       PYTHONUNBUFFERED: "1",
       PYTHONDONTWRITEBYTECODE: "1",
       PYTHONPYCACHEPREFIX: require$$0.join(workDir, "pycache"),

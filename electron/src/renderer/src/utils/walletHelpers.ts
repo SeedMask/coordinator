@@ -79,6 +79,15 @@ export function kaspaDerivationPath(account = 0): string {
   return `m/44'/111111'/${account}'`
 }
 
+export function accountIndexFromDerivation(path: string): number | null {
+  const m = path
+    .trim()
+    .match(/m\/(?:44'\/111111'|45'\/111111'|84'\/0'|86'\/0'|49'\/0'|48'\/0')\/(\d+)'/i)
+  if (!m) return null
+  const n = Number.parseInt(m[1]!, 10)
+  return Number.isFinite(n) ? n : null
+}
+
 export function kaspaMultisigDerivationPath(account = 0): string {
   return `m/45'/111111'/${account}'`
 }

@@ -115,7 +115,7 @@ export function bundledRuntimeDir(): string | undefined {
 
 /** Coordinator root = folder containing run_backend.py */
 export function findCoordinatorRoot(): string {
-  const env = process.env.SEEDPASS_COORDINATOR_ROOT?.trim()
+  const env = process.env.SEEDMASK_COORDINATOR_ROOT?.trim()
   if (env && existsSync(join(env, 'run_backend.py'))) return env
 
   // Packaged: Resources/coordinator
@@ -129,7 +129,7 @@ export function findCoordinatorRoot(): string {
   if (existsSync(join(relativeRoot, 'run_backend.py'))) return relativeRoot
 
   throw new Error(
-    'Cannot find coordinator backend (run_backend.py). Set SEEDPASS_COORDINATOR_ROOT or run from SeedMask_Coordinator/electron.',
+    'Cannot find coordinator backend (run_backend.py). Set SEEDMASK_COORDINATOR_ROOT or run from SeedMask_Coordinator/electron.',
   )
 }
 
@@ -145,7 +145,7 @@ export function backendStderrLogPath(): string {
 }
 
 export function resolvePython(coordinatorRoot: string): string {
-  const env = process.env.SEEDPASS_PYTHON?.trim()
+  const env = process.env.SEEDMASK_PYTHON?.trim()
   if (env && canRunPython(env)) return env
 
   const venv =

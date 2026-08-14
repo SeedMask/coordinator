@@ -6,11 +6,6 @@ import {
   type HardwareImportPayload,
 } from '@renderer/components/ConnectHardwareWalletSheet'
 import { QRScannerSheet } from '@renderer/components/QRScannerSheet'
-import {
-  applyKaspaImportHistoryChoice,
-  KaspaImportHistoryPrompt,
-  type KaspaImportHistoryChoice,
-} from '@renderer/components/KaspaImportHistoryPrompt'
 import { WalletPasswordModal } from '@renderer/components/WalletPasswordModal'
 import { useApp } from '@renderer/state/AppProvider'
 import { APIError } from '@renderer/api/client'
@@ -47,7 +42,7 @@ export function AddAccountSheet({
   onClose: () => void
   onCreated: (wallet: WalletDTO) => void
 }): React.JSX.Element {
-  const { api, wallets, loadWallets, activateWallet, discoverWallet, setStatusMessage, networkSettings, persistNetworkSettings } =
+  const { api, wallets, loadWallets, activateWallet, discoverWallet, setStatusMessage, networkSettings, setKaspaImportHistoryPromptWalletId } =
     useApp()
   const chain = walletCoin(sourceWallet)
   const group = useMemo(() => walletsSharingAccountGroup(wallets, sourceWallet), [wallets, sourceWallet])
@@ -81,8 +76,6 @@ export function AddAccountSheet({
     hardware?: string
   } | null>(null)
   const [showScanner, setShowScanner] = useState(false)
-  const [historyPromptWallet, setHistoryPromptWallet] = useState<WalletDTO | null>(null)
-  const [historyPromptBusy, setHistoryPromptBusy] = useState(false)
 
   const derivation = accountIndex == null ? '' : derivationForSiblingAccount(sourceWallet, accountIndex)
   const btcScript: BitcoinScriptType =
@@ -199,7 +192,8 @@ export function AddAccountSheet({
       await activateWallet(wallet.id, wallet)
       setStatusMessage(`Account ${opts.account} added`)
       if (chain === 'kaspa' && needsKaspaImportHistoryPrompt(networkSettings)) {
-        setHistoryPromptWallet(wallet)
+        setKaspaImportHistoryPromptWalletId(wallet.id)
+        onCreated(wallet)
         return
       }
       void discoverWallet(wallet.id)
@@ -208,29 +202,6 @@ export function AddAccountSheet({
       setEncryptError(e instanceof Error ? e.message : 'Failed to add account')
     } finally {
       setBusy(false)
-    }
-  }
-
-  async function resolveHistoryPrompt(choice: KaspaImportHistoryChoice): Promise<void> {
-    const wallet = historyPromptWallet
-    if (!wallet || historyPromptBusy) return
-    setHistoryPromptBusy(true)
-    try {
-      await applyKaspaImportHistoryChoice({
-        choice,
-        walletId: wallet.id,
-        networkSettings,
-        persistNetworkSettings,
-        discoverWallet,
-      })
-      setHistoryPromptWallet(null)
-      onCreated(wallet)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'History discovery failed')
-      setHistoryPromptWallet(null)
-      onCreated(wallet)
-    } finally {
-      setHistoryPromptBusy(false)
     }
   }
 
@@ -325,15 +296,6 @@ export function AddAccountSheet({
       : importKind === 'seedmask'
         ? ' Scan Export from the same SeedMask for another BIP44 account.'
         : ' Import the watch-only key for another BIP44 account.'
-
-  if (historyPromptWallet) {
-    return (
-      <KaspaImportHistoryPrompt
-        onChoosePublic={() => void resolveHistoryPrompt('public')}
-        onChoosePrivate={() => void resolveHistoryPrompt('private')}
-      />
-    )
-  }
 
   if (!supports) {
     return (

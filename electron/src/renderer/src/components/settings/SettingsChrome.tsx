@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { AppTheme, BitcoinConnectionTestResponse } from '@renderer/api/types'
+import type { AppTheme, ConnectionTestResponse } from '@renderer/api/types'
 import type { NetworkSettingsSavePhase } from '@renderer/hooks/useNetworkSettingsEditor'
 import { ChainLogoMark, ThemeIcon } from '@renderer/components/BrandMarks'
 import { CalloutIcon, CheckmarkIcon, ConnectionModeIcon, InfoTipIcon, LoadingSpinner } from '@renderer/components/icons'
@@ -42,17 +42,22 @@ export function SettingsSectionBlock({
   subtitle,
   children,
   trailing,
+  titleBadge,
 }: {
   title: string
   subtitle?: string
   children: ReactNode
   trailing?: ReactNode
+  titleBadge?: ReactNode
 }): React.JSX.Element {
   return (
     <section className="settings-section">
       <div className="settings-section-head">
         <div>
-          <h3>{title}</h3>
+          <h3 className={titleBadge ? 'settings-section-title-row' : undefined}>
+            {title}
+            {titleBadge}
+          </h3>
           {subtitle && <p className="muted">{subtitle}</p>}
         </div>
         {trailing}
@@ -240,6 +245,85 @@ export function SettingsField({
   )
 }
 
+const KASPA_LOCAL_NODE_HOST = '127.0.0.1:17110'
+const KASPA_LOCAL_NODE_SUGGESTION = `ws://${KASPA_LOCAL_NODE_HOST}`
+
+export function SettingsKaspaWsUrlField({
+  label,
+  hint,
+  infoTip,
+  value,
+  onChange,
+}: {
+  label: string
+  hint?: string
+  infoTip?: string
+  value: string
+  onChange: (value: string) => void
+}): React.JSX.Element {
+  const scheme = /^wss:\/\//i.test(value) ? 'wss://' : 'ws://'
+  const rest = value.replace(/^wss?:\/\//i, '')
+
+  function setScheme(nextScheme: 'ws://' | 'wss://'): void {
+    onChange(`${nextScheme}${rest}`)
+  }
+
+  function setRest(nextRest: string): void {
+    const cleaned = nextRest.replace(/^wss?:\/\//i, '')
+    onChange(`${scheme}${cleaned}`)
+  }
+
+  return (
+    <div className="settings-field">
+      <SettingsFieldLabel label={label} infoTip={infoTip} />
+      <div className="settings-ws-url-row">
+        <label className="settings-ws-scheme-wrap">
+          <span className="sr-only">WebSocket scheme</span>
+          <select
+            className="settings-ws-scheme-select"
+            value={scheme}
+            onChange={(e) => setScheme(e.target.value === 'wss://' ? 'wss://' : 'ws://')}
+          >
+            <option value="ws://">ws://</option>
+            <option value="wss://">wss://</option>
+          </select>
+          <svg className="settings-ws-scheme-caret" viewBox="0 0 12 8" width="12" height="8" aria-hidden>
+            <path
+              d="M1.2 1.6 L6 6.4 L10.8 1.6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </label>
+        <input
+          className="field-input settings-ws-url-input"
+          type="text"
+          value={rest}
+          placeholder="127.0.0.1:17110"
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          onChange={(e) => setRest(e.target.value)}
+        />
+      </div>
+      <div className="settings-ws-url-actions">
+        <button
+          type="button"
+          className="settings-link-btn"
+          disabled={value.trim() === KASPA_LOCAL_NODE_SUGGESTION}
+          onClick={() => onChange(KASPA_LOCAL_NODE_SUGGESTION)}
+        >
+          Use local node ({KASPA_LOCAL_NODE_HOST})
+        </button>
+      </div>
+      {hint && <span className="settings-field-hint">{hint}</span>}
+    </div>
+  )
+}
+
 export function SettingsPathBrowseField({
   label,
   hint,
@@ -346,14 +430,16 @@ export function SettingsToggleRow({
   infoTip,
   checked,
   onChange,
+  className,
 }: {
   label: string
   infoTip?: string
   checked: boolean
   onChange: (checked: boolean) => void
+  className?: string
 }): React.JSX.Element {
   return (
-    <label className="settings-toggle-row">
+    <label className={className ? `settings-toggle-row ${className}` : 'settings-toggle-row'}>
       <span className="settings-toggle-label">
         <span>{label}</span>
         {infoTip && <InfoTipButton text={infoTip} />}
@@ -444,7 +530,7 @@ export function SettingsConnectionTestPanel({
   errorMessage,
   isRunning,
 }: {
-  result: BitcoinConnectionTestResponse | null
+  result: ConnectionTestResponse | null
   errorMessage: string | null
   isRunning: boolean
 }): React.JSX.Element {
@@ -461,7 +547,9 @@ export function SettingsConnectionTestPanel({
     ? 'Testing…'
     : result
       ? result.ok
-        ? 'Connection OK'
+        ? result.summary.toLowerCase().includes('still syncing')
+          ? 'Connected — syncing'
+          : 'Connection OK'
         : 'Connection failed'
       : errorMessage
         ? 'Connection failed'
@@ -471,7 +559,15 @@ export function SettingsConnectionTestPanel({
     ? 'Checking the endpoints listed below using your current form values.'
     : result?.summary || errorMessage || 'Press Test Connection above to verify your current settings.'
 
-  const statusKind = isRunning ? 'running' : result?.ok ? 'ok' : result || errorMessage ? 'failed' : 'idle'
+  const statusKind = isRunning
+    ? 'running'
+    : result?.ok
+      ? result.summary.toLowerCase().includes('still syncing')
+        ? 'warn'
+        : 'ok'
+      : result || errorMessage
+        ? 'failed'
+        : 'idle'
 
   return (
     <div className={`test-panel settings-test-panel settings-test-panel-${statusKind}`}>
@@ -479,7 +575,7 @@ export function SettingsConnectionTestPanel({
         <span className={`settings-test-status-icon ${statusKind}`} aria-hidden>
           {isRunning ? (
             <LoadingSpinner size={18} />
-          ) : statusKind === 'ok' ? (
+          ) : statusKind === 'ok' || statusKind === 'warn' ? (
             <CheckmarkIcon size={18} />
           ) : statusKind === 'failed' ? (
             <span className="settings-test-x">✕</span>
@@ -511,13 +607,20 @@ export function SettingsConnectionTestPanel({
 
 function formatTestStep(step: string): string {
   const lower = step.toLowerCase()
-  if (lower.startsWith('failed') || lower.startsWith('✗')) return `✗  ${step}`
+  if (lower.startsWith('failed') || lower.startsWith('✗') || lower.includes('utxo index is off') || lower.includes('utxo index appears missing') || lower.includes('cookie file not found') || lower.includes('connection refused') || lower.includes('rejected login')) {
+    return `✗  ${step}`
+  }
+  if (lower.startsWith('warning:') || lower.includes('still syncing')) {
+    return `!  ${step}`
+  }
   if (
     lower.includes(' ok') ||
     lower.startsWith('esplora ok') ||
     lower.includes('reachable') ||
     lower.includes('ping') ||
-    lower.includes('connected')
+    lower.includes('connected') ||
+    lower.includes('enabled') ||
+    lower.includes('reports synced')
   ) {
     return `✓  ${step}`
   }

@@ -1,4 +1,4 @@
-"""Kaspa mainnet RPC + watch-only kpub derivation (SeedPass m/44'/111111'/account')."""
+"""Kaspa mainnet RPC + watch-only kpub derivation (SeedMask m/44'/111111'/account')."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from kaspa import NetworkType, PublicKeyGenerator, Resolver, RpcClient
 
@@ -219,9 +220,9 @@ class KaspaService:
             self._connection_key = None
 
     def _connection_settings(self) -> tuple[str, str]:
-        from .network_settings import load_network_settings
+        from .network_settings import load_kaspa_settings
 
-        kaspa = load_network_settings().kaspa
+        kaspa = load_kaspa_settings()
         return kaspa.rpc_mode, kaspa.rpc_url
 
     async def _get_client(self) -> RpcClient:
@@ -506,6 +507,30 @@ class KaspaService:
         assert last_err is not None
         raise RuntimeError(f"Kaspa network unavailable: {last_err}") from last_err
 
+    async def get_sink_blue_score(self) -> int:
+        """Current VSPC tip blue score from the connected kaspad (own node or resolver)."""
+        last_err: Exception | None = None
+        tip_timeout = min(5.0, RPC_TIMEOUT_SEC)
+        for attempt in range(2):
+            try:
+                client = await self._get_client()
+                res = await asyncio.wait_for(client.get_sink_blue_score(), timeout=tip_timeout)
+                tip = getattr(res, "blue_score", None)
+                if tip is None:
+                    tip = getattr(res, "blueScore", None)
+                if tip is None and isinstance(res, dict):
+                    tip = res.get("blue_score") or res.get("blueScore")
+                return int(tip or 0)
+            except Exception as e:
+                last_err = e
+                if attempt == 0 and self._transient_rpc_error(e):
+                    await self._reset_client()
+                    continue
+                break
+        if last_err is not None:
+            raise RuntimeError(f"Kaspa tip unavailable: {last_err}") from last_err
+        return 0
+
     def _scan_address_ranges(self, cfg: WalletConfig) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
         """Addresses to query for balance.
 
@@ -728,6 +753,164 @@ class KaspaService:
 
 
 _service: KaspaService | None = None
+
+
+def _info_flag(info: Any, *names: str) -> bool | None:
+    if info is None:
+        return None
+    for name in names:
+        if isinstance(info, dict) and name in info:
+            return bool(info.get(name))
+        if hasattr(info, name):
+            try:
+                return bool(getattr(info, name))
+            except Exception:
+                continue
+    return None
+
+
+def _describe_kaspa_connect_error(exc: BaseException, *, url: str) -> str:
+    msg = str(exc).strip()
+    low = msg.lower()
+    if isinstance(exc, asyncio.TimeoutError) or "timed out" in low or "timeout" in low:
+        return (
+            "Timed out waiting for the node — is kaspad running? First sync can take a while; "
+            "try again once the node has started."
+        )
+    if "refused" in low:
+        hint = ""
+        if ":16111" in url:
+            hint = " Port 16111 is usually P2P; Coordinator needs Borsh WebSocket on 17110."
+        elif url and "17110" not in url:
+            hint = " Own nodes usually listen on ws://127.0.0.1:17110."
+        return f"Connection refused — nothing is accepting WebSocket RPC at {url or 'the node'}.{hint}"
+    if "invalid" in low and ("url" in low or "scheme" in low):
+        return "Invalid node address — use ws:// or wss:// (example: ws://127.0.0.1:17110)."
+    if "websocket" in low or "not connected" in low:
+        return f"Could not open WebSocket to {url or 'the node'} — {msg or 'connection failed'}."
+    return msg or type(exc).__name__
+
+
+async def test_kaspa_connection(settings_dict: dict | None = None) -> dict[str, Any]:
+    """Probe Kaspa RPC using draft or saved settings (does not mutate the shared service client)."""
+    from .network_settings import KaspaNetworkSettings, kaspa_settings_override
+
+    if settings_dict is not None:
+        trial = KaspaNetworkSettings.from_dict(settings_dict)
+        trial.validate()
+        with kaspa_settings_override(trial):
+            return await _test_kaspa_connection_impl()
+    return await _test_kaspa_connection_impl()
+
+
+async def _test_kaspa_connection_impl() -> dict[str, Any]:
+    from .network_settings import load_kaspa_settings
+
+    kaspa = load_kaspa_settings()
+    mode = kaspa.rpc_mode
+    url = (kaspa.rpc_url or "").strip()
+    steps: list[str] = []
+    client: RpcClient | None = None
+    test_timeout = min(20.0, RPC_CONNECT_TIMEOUT_SEC)
+
+    if mode == "custom":
+        steps.append(f"Connecting to {url}")
+        if ":16111" in url:
+            steps.append(
+                "Warning: port 16111 is usually Kaspa P2P — Borsh WebSocket RPC is typically 17110."
+            )
+        client = RpcClient(url=url)
+    else:
+        steps.append("Connecting via public Kaspa resolver")
+        client = RpcClient(resolver=Resolver())
+
+    try:
+        try:
+            await asyncio.wait_for(client.connect(), timeout=test_timeout)
+        except Exception as exc:
+            target = url if mode == "custom" else "public resolver"
+            summary = _describe_kaspa_connect_error(exc, url=target)
+            return {
+                "ok": False,
+                "mode": mode,
+                "summary": summary,
+                "steps": [*steps, summary],
+            }
+
+        steps.append("WebSocket connected")
+
+        try:
+            info = await asyncio.wait_for(client.get_info(), timeout=test_timeout)
+        except Exception as exc:
+            summary = f"Connected, but getInfo failed — {exc}"
+            return {
+                "ok": False,
+                "mode": mode,
+                "summary": summary,
+                "steps": [*steps, summary],
+            }
+
+        is_synced = _info_flag(info, "is_synced", "isSynced")
+        is_utxo_indexed = _info_flag(info, "is_utxo_indexed", "isUtxoIndexed", "has_utxo_index", "hasUtxoIndex")
+
+        if is_synced is False:
+            steps.append(
+                "Warning: node is still syncing — balances may look empty or incomplete until it finishes."
+            )
+        elif is_synced is True:
+            steps.append("Node reports synced")
+        else:
+            steps.append("Could not read sync status from getInfo")
+
+        if is_utxo_indexed is False:
+            steps.append(
+                "UTXO index is off — restart kaspad with --utxoindex (Coordinator needs it for balances)."
+            )
+            return {
+                "ok": False,
+                "mode": mode,
+                "summary": "Node reachable, but UTXO index is disabled",
+                "steps": steps,
+            }
+        if is_utxo_indexed is True:
+            steps.append("UTXO index is enabled")
+        else:
+            # Older nodes may omit the flag — probe with an empty UTXO query.
+            try:
+                await asyncio.wait_for(
+                    client.get_utxos_by_addresses({"addresses": []}),
+                    timeout=test_timeout,
+                )
+                steps.append("UTXO query OK")
+            except Exception as exc:
+                low = str(exc).lower()
+                if "utxo" in low and "index" in low:
+                    steps.append(
+                        "UTXO index appears missing — restart kaspad with --utxoindex."
+                    )
+                    return {
+                        "ok": False,
+                        "mode": mode,
+                        "summary": "Node reachable, but UTXO index is unavailable",
+                        "steps": steps,
+                    }
+                steps.append(f"UTXO probe skipped: {exc}")
+
+        summary = "Connected to Kaspa node"
+        if is_synced is False:
+            summary = "Connected, but the node is still syncing"
+        return {
+            "ok": True,
+            "mode": mode,
+            "summary": summary,
+            "steps": steps,
+        }
+    finally:
+        if client is not None:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
 
 
 def get_service() -> KaspaService:

@@ -34,7 +34,7 @@ extraResources:
       - requirements.txt
       - VERSION.txt
       - BUILD_STAMP.txt
-  # Prefer Coordinator tools (kept in sync with the app). SeedPass_UI_Shell/tools is a fallback mirror.
+  # Prefer Coordinator tools (kept in sync with the app). SeedMask Firmware/tools is a fallback mirror.
   - from: ../tools
     to: coordinator/tools
     filter:
@@ -85,3 +85,11 @@ dmg:
   artifactName: SeedMask-Coordinator-${version}-${arch}.${ext}
 
 artifactName: SeedMask-Coordinator-${version}-${os}-${arch}.${ext}
+
+# Update feed for electron-updater (embedded as app-update.yml).
+# Does not upload releases by itself — only used when you explicitly publish.
+publish:
+  provider: github
+  owner: SeedMask
+  repo: coordinator
+  releaseType: release

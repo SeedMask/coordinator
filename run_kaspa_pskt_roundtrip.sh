@@ -12,7 +12,16 @@ if [[ ! -d .venv ]]; then
 fi
 
 echo "Ensuring rusty-kaspa WASM SDK (PSKT/PSKB validation) …"
-bash ../SeedPass_UI_Shell/tools/kaspa_wasm_node/setup_kaspa_wasm.sh
+if [[ -f "$ROOT/tools/kaspa_wasm_node/setup_kaspa_wasm.sh" ]]; then
+  bash "$ROOT/tools/kaspa_wasm_node/setup_kaspa_wasm.sh"
+elif [[ -f "$ROOT/../SeedMask_Firmware/tools/kaspa_wasm_node/setup_kaspa_wasm.sh" ]]; then
+  bash "$ROOT/../SeedMask_Firmware/tools/kaspa_wasm_node/setup_kaspa_wasm.sh"
+elif [[ -f "$ROOT/../SeedMask Firmware/tools/kaspa_wasm_node/setup_kaspa_wasm.sh" ]]; then
+  bash "$ROOT/../SeedMask Firmware/tools/kaspa_wasm_node/setup_kaspa_wasm.sh"
+else
+  echo "error: missing tools/kaspa_wasm_node/setup_kaspa_wasm.sh (expected in this repo under tools/)" >&2
+  exit 1
+fi
 
 echo "Running PSKT/PSKB round-trip …"
 exec .venv/bin/python scripts/kaspa_pskt_roundtrip.py

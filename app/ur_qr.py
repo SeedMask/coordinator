@@ -12,19 +12,19 @@ from .bcur.ur import UR
 from .bcur.ur_encoder import UREncoder
 from .tx_pipeline import unsigned_json_for_qr
 
-# Mac UI auto-cycles unique BC-UR parts; SeedPass fountain decoder has no hard 8-part cap.
+# Mac UI auto-cycles unique BC-UR parts; SeedMask fountain decoder has no hard 8-part cap.
 # Large MAX sends can need more than 16 parts; keep parts scannable but do not block them.
 MAX_DISPLAY_FRAMES = 16
 DEFAULT_MAX_FRAGMENT_LEN = 50
-# Fewer QR modules = easier for SeedPass camera; large multisig payloads may use more frames.
+# Fewer QR modules = easier for SeedMask camera; large multisig payloads may use more frames.
 TARGET_QR_MODULES = 101
 MAX_QR_MODULES_SINGLE = 41
-# Static single QR: full payload in one symbol (SeedPass uses zoom + violent decode once seen).
+# Static single QR: full payload in one symbol (SeedMask uses zoom + violent decode once seen).
 STATIC_MAX_QR_MODULES = 129
 STATIC_MAX_URI_CHARS = 2800
 # Animated multipart: Mac UI auto-cycles unique parts (Start/Pause below QR).
 DEFAULT_FRAME_MS = 900
-# Each frame visible long enough for SeedPass handoff (~400ms) before violent snap of next part.
+# Each frame visible long enough for SeedMask handoff (~400ms) before violent snap of next part.
 ANIMATED_FRAME_MS = 450
 # Native pixels per module — large PNG, shown ~1:1 on Mac (avoid blurry upscale).
 DEFAULT_QR_BOX_SIZE = 16

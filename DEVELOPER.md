@@ -1,20 +1,22 @@
 # SeedMask Coordinator — Developer Guide
 
-Technical setup for building, testing, and hacking on the coordinator. End users should use the packaged app — see [USER_GUIDE.md](USER_GUIDE.md) and [seedmask.io/app](https://seedmask.io/app).
+Technical setup for building, testing, and hacking on the coordinator. End users should use the packaged **SeedMask Coordinator.app** — see [USER_GUIDE.md](USER_GUIDE.md).
 
 ## Repository layout
 
 | Path | Purpose |
 |------|---------|
 | `app/` | FastAPI backend (wallet, RPC, tx pipeline) |
-| `tools/` | Kaspa QR, broadcast, PSKT/PSKB local copy used by coordinator builds |
+| `tools/` | Kaspa QR, broadcast, PSKT/PSKB + WASM helpers bundled into releases |
 | `electron/` | Electron desktop app and release packaging |
 | `scripts/` | Tests (PSKT round-trip, preflight) |
+
+Shipping builds only need **this** repository. See [RELEASE.md](RELEASE.md) for installer reproducibility (`tools/` is included here; firmware is optional).
 
 ## Dev environment
 
 ```bash
-cd coordinator
+cd SeedMask_Coordinator
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
@@ -25,17 +27,20 @@ Optional: Kaspa Python SDK for broadcast tests:
 .venv/bin/pip install kaspa
 ```
 
-Node for rusty-kaspa WASM validation:
+Node (Homebrew) for rusty-kaspa WASM validation:
 
 ```bash
-# Node 20+ recommended
+brew install node
+# Prefer the copy shipped with this repo:
 bash tools/kaspa_wasm_node/setup_kaspa_wasm.sh
+# Or, if you keep firmware next door:
+# bash ../SeedMask_Firmware/tools/kaspa_wasm_node/setup_kaspa_wasm.sh
 ```
 
 ## Run backend only
 
 ```bash
-export SEEDPASS_COORDINATOR_ROOT="$(pwd)"
+export SEEDMASK_COORDINATOR_ROOT="$(pwd)"
 .venv/bin/python run_backend.py
 # API: http://127.0.0.1:18765/api/status
 ```
@@ -43,42 +48,52 @@ export SEEDPASS_COORDINATOR_ROOT="$(pwd)"
 ## Run Electron app
 
 ```bash
-cd electron
+cd SeedMask_Coordinator/electron
 npm install
 npm run dev
 ```
 
 ## Build shipping app
 
-Bundles Python, Node, and Kaspa WASM into the Electron package:
+Bundles Python, Node, and Kaspa WASM into the Electron package. From `electron/`:
 
 ```bash
-bash release.sh
+cd SeedMask_Coordinator/electron
+npm install
+npm run release
 ```
 
-Sign and notarize separately with your Apple Developer ID for public macOS distribution.
+Or from the repo root:
+
+```bash
+bash SeedMask_Coordinator/release.sh
+```
+
+Details and CI notes: [RELEASE.md](RELEASE.md).
+
+Sign and notarize separately with your Apple Developer ID for public macOS distribution (optional for private/unsigned builds).
 
 ## Tests
 
 PSKT / PSKB rusty-kaspa round-trip (WASM parse):
 
 ```bash
-bash run_kaspa_pskt_roundtrip.sh
+bash SeedMask_Coordinator/run_kaspa_pskt_roundtrip.sh
 ```
 
 Toccata preflight:
 
 ```bash
-bash run_toccata_preflight.sh
+bash SeedMask_Coordinator/run_toccata_preflight.sh
 ```
 
 ## Transaction formats
 
 - **SeedMask QR / microSD:** JSON v2 (`unsigned` in draft files) — firmware parser.
 - **Internal / export:** rusty-kaspa-compatible PSKT JSON + `PSKT` hex; multi-UTXO sweeps use PSKB bundles.
-- Draft files: `format: seedpass_pskt_draft_v1` with `pskt_hex`, `pskb_hex`, `pskts[]`, and `unsigned`.
+- Draft files: `format: seedmask_pskt_draft_v1` with `pskt_hex`, `pskb_hex`, `pskts[]`, and `unsigned`.
 
-## Notes
+## Data on disk
 
-- Do not commit `electron/release/`, `electron/build/`, or `node_modules/`.
-- Installers (`.dmg`, etc.) belong on GitHub Releases, not in git history.
+- `~/.seedmask-coordinator/` — wallets, UTXO cache, settings (see app data layout)
+- `~/.seedmask-coordinator/drafts/` — unsigned transaction drafts

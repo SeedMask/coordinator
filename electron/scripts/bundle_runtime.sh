@@ -12,7 +12,13 @@ ELECTRON_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 COORD="$(cd "$ELECTRON_DIR/.." && pwd)"
 REPO="$(cd "$COORD/.." && pwd)"
 RUNTIME="${1:-$ELECTRON_DIR/build/runtime}"
-TOOLS_WASM="$REPO/SeedPass_UI_Shell/tools/kaspa_wasm_node"
+if [[ -d "$REPO/SeedMask_Firmware/tools/kaspa_wasm_node" ]]; then
+  TOOLS_WASM="$REPO/SeedMask_Firmware/tools/kaspa_wasm_node"
+elif [[ -d "$REPO/SeedMask Firmware/tools/kaspa_wasm_node" ]]; then
+  TOOLS_WASM="$REPO/SeedMask Firmware/tools/kaspa_wasm_node"
+else
+  TOOLS_WASM="$COORD/tools/kaspa_wasm_node"
+fi
 NODE_VER="22.16.0"
 CACHE_DIR="$ELECTRON_DIR/.cache"
 # Portable CPython (no dependency on python.org install on the user's machine).

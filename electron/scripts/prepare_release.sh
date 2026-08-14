@@ -21,7 +21,13 @@ fi
 bash "$SCRIPT_DIR/preflight.sh"
 COORD="$(cd "$ELECTRON_DIR/.." && pwd)"
 REPO="$(cd "$COORD/.." && pwd)"
-FIRMWARE_TOOLS="$REPO/SeedPass_UI_Shell/tools"
+if [[ -d "$REPO/SeedMask_Firmware/tools" ]]; then
+  FIRMWARE_TOOLS="$REPO/SeedMask_Firmware/tools"
+elif [[ -d "$REPO/SeedMask Firmware/tools" ]]; then
+  FIRMWARE_TOOLS="$REPO/SeedMask Firmware/tools"
+else
+  FIRMWARE_TOOLS=""
+fi
 APP_VERSION="$(node -p "require('$ELECTRON_DIR/package.json').version" 2>/dev/null || echo 1.0.0)"
 STAMP="$(date '+%Y-%m-%d %H:%M:%S')"
 
@@ -42,9 +48,16 @@ bash "$SCRIPT_DIR/sync_app_icon.sh"
 echo "$APP_VERSION" > "$COORD/VERSION.txt"
 echo "build $STAMP" > "$COORD/BUILD_STAMP.txt"
 
-echo "Syncing SeedPass tools into coordinator/tools…"
+echo "Syncing SeedMask tools into coordinator/tools…"
 mkdir -p "$COORD/tools"
-rsync -a --delete "$FIRMWARE_TOOLS/" "$COORD/tools/"
+if [[ -n "$FIRMWARE_TOOLS" ]]; then
+  rsync -a --delete "$FIRMWARE_TOOLS/" "$COORD/tools/"
+elif [[ -d "$COORD/tools" ]] && compgen -G "$COORD/tools/*" >/dev/null; then
+  echo "warn: firmware tools folder not found — using existing coordinator/tools"
+else
+  echo "error: missing firmware tools (expected SeedMask_Firmware/tools next to SeedMask_Coordinator)" >&2
+  exit 1
+fi
 
 if [[ "$SKIP_RUNTIME" -eq 0 ]]; then
   bash "$SCRIPT_DIR/bundle_runtime.sh" "$ELECTRON_DIR/build/runtime"

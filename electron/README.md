@@ -80,9 +80,9 @@ Host `coordinator/website/` on any static host (Netlify, S3, GitHub Pages, etc.)
 
 | Variable | Purpose |
 |----------|---------|
-| `SEEDPASS_COORDINATOR_ROOT` | Path to folder containing `run_backend.py` |
-| `SEEDPASS_PYTHON` | Python executable with deps installed |
-| `SEEDPASS_COORDINATOR_PORT` | API port (default `18765`) |
+| `SEEDMASK_COORDINATOR_ROOT` | Path to folder containing `run_backend.py` |
+| `SEEDMASK_PYTHON` | Python executable with deps installed |
+| `SEEDMASK_COORDINATOR_PORT` | API port (default `18765`) |
 | `SEEDMASK_NODE` | Bundled Node for PSKT validation |
 | `SEEDMASK_WASM_DIR` | Bundled Kaspa WASM SDK |
 

@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -106,6 +107,20 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="SeedMask Kaspa Coordinator", lifespan=lifespan)
+# electron-vite serves the UI from http://localhost:517x in `npm run dev`.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+    ],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class MultisigCosignerIn(BaseModel):
@@ -154,6 +169,7 @@ class WalletUpdateIn(BaseModel):
     label: str | None = None
     scan_limit: int | None = Field(default=None, ge=5, le=100)
     fingerprint: str | None = None
+    derivation: str | None = None
     hardware: str | None = None
     keystore_label: str | None = None
     multisig_cosigners: list[MultisigCosignerIn] | None = None
@@ -400,7 +416,7 @@ def _resolve_unlocked_wallet_id(wallet_id: str | None) -> str:
 
 
 def _app_version() -> str:
-    root = os.environ.get("SEEDPASS_COORDINATOR_ROOT", "").strip()
+    root = os.environ.get("SEEDMASK_COORDINATOR_ROOT", "").strip()
     if root:
         ver = Path(root) / "VERSION.txt"
         if ver.is_file():
@@ -469,11 +485,15 @@ async def wallet_sync_enqueue(
     wallet_id: str,
     mode: str = "hot",
     wait: bool = False,
+    history_once: str | None = None,
 ):
     """Enqueue background sync (hot | discover | deep). UI reads /state immediately."""
     _resolve_unlocked_wallet_id(wallet_id)
     if mode not in ("hot", "discover", "deep"):
         raise HTTPException(400, "mode must be hot, discover, or deep")
+    once = (history_once or "").strip().lower() or None
+    if once and once != "public":
+        raise HTTPException(400, "history_once must be public when set")
     from .sync_worker import SyncPriority
 
     priority = SyncPriority.ACTIVE_HOT if mode == "hot" else SyncPriority.BACKGROUND_DEEP
@@ -483,6 +503,7 @@ async def wallet_sync_enqueue(
             mode,
             priority=priority,
             wait=wait,
+            history_once=once,
         )
         if wait and result:
             return result
@@ -538,6 +559,26 @@ async def network_settings_test_bitcoin(body: BitcoinNetworkSettingsIn):
         return {
             "ok": False,
             "mode": body.server_mode,
+            "summary": str(e),
+            "steps": [str(e)],
+        }
+
+
+@app.post("/api/settings/network/test-kaspa")
+async def network_settings_test_kaspa(body: KaspaNetworkSettingsIn):
+    from .kaspa_service import test_kaspa_connection
+    from .network_settings import KaspaNetworkSettings
+
+    try:
+        KaspaNetworkSettings.from_dict(body.model_dump()).validate()
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        return await test_kaspa_connection(body.model_dump())
+    except Exception as e:
+        return {
+            "ok": False,
+            "mode": body.rpc_mode,
             "summary": str(e),
             "steps": [str(e)],
         }
@@ -686,6 +727,7 @@ async def wallets_update(wallet_id: str, body: WalletUpdateIn):
             label=body.label,
             scan_limit=body.scan_limit,
             fingerprint=fingerprint,
+            derivation=body.derivation,
             hardware=body.hardware,
             keystore_label=body.keystore_label,
             multisig_cosigners=multisig_cosigners,
@@ -2215,7 +2257,7 @@ async def get_draft_export(draft_id: str, wallet_id: str | None = None):
         "pskt_hex": pskt_hex,
         "pskb_hex": pskb_hex,
         "pskt_count": pskt_count,
-        "format": "seedpass_pskt_draft_v1" if pskt or pskb_hex else "legacy_json_v2",
+        "format": "seedmask_pskt_draft_v1" if pskt or pskb_hex else "legacy_json_v2",
         "signatures_loaded": signatures_loaded,
         "signatures_required": signatures_required,
     }
@@ -2253,7 +2295,7 @@ async def tx_import(body: ImportTxIn):
 
     # --- Bitcoin PSBT path (unsigned, partial, or fully signed) ---
     if is_bitcoin_draft(unsigned) or (
-        unsigned.get("format") == "seedpass_psbt_draft_v1"
+        unsigned.get("format") == "seedmask_psbt_draft_v1"
         and (unsigned.get("psbt_base64") or unsigned.get("psbts"))
     ) or (
         isinstance(unsigned.get("psbt_base64"), str) and unsigned["psbt_base64"].strip()
@@ -2344,7 +2386,7 @@ async def tx_import(body: ImportTxIn):
 
     if isinstance(unsigned.get("pskt_hex"), str) and unsigned["pskt_hex"].strip().upper().startswith("PSKT"):
         pskt, unsigned = import_pskt_hex(unsigned["pskt_hex"])
-    elif unsigned.get("format") == "seedpass_pskt_draft_v1":
+    elif unsigned.get("format") == "seedmask_pskt_draft_v1":
         if isinstance(unsigned.get("pskt"), dict):
             pskt, unsigned = parse_draft_file(unsigned)
         elif isinstance(unsigned.get("pskt_hex"), str) and unsigned["pskt_hex"].strip().upper().startswith(
@@ -2365,7 +2407,7 @@ async def tx_import(body: ImportTxIn):
             pskt, unsigned = parse_draft_file(unsigned)
     elif "inputs" not in unsigned and isinstance(unsigned.get("unsigned"), dict):
         inner = unsigned["unsigned"]
-        if isinstance(inner, dict) and inner.get("format") == "seedpass_pskt_draft_v1":
+        if isinstance(inner, dict) and inner.get("format") == "seedmask_pskt_draft_v1":
             pskt, unsigned = parse_draft_file(inner)
         elif isinstance(unsigned.get("pskt"), dict) or (
             isinstance(unsigned.get("pskt_hex"), str) and unsigned["pskt_hex"].strip()
@@ -2395,7 +2437,7 @@ async def tx_import(body: ImportTxIn):
     except Exception:
         pass
     # If handoff body still has top-level pskt with more partials, prefer it
-    if body.unsigned.get("format") == "seedpass_pskt_draft_v1" and isinstance(
+    if body.unsigned.get("format") == "seedmask_pskt_draft_v1" and isinstance(
         body.unsigned.get("pskt"), dict
     ):
         pskt = body.unsigned["pskt"]

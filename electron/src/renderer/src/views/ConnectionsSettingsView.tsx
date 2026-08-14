@@ -9,6 +9,7 @@ import {
   SettingsFriendlyCallout,
   SettingsHostPortField,
   SettingsInlineError,
+  SettingsKaspaWsUrlField,
   SettingsPageLayout,
   SettingsPathBrowseField,
   SettingsRestoreButton,
@@ -31,28 +32,46 @@ import {
 
 type ConnectionsDestination = 'overview' | 'bitcoin' | 'kaspa'
 
+export type { ConnectionsDestination }
+
 export function ConnectionsSettingsView({
   editor: editorProp,
+  onDestinationChange,
 }: {
   editor?: NetworkSettingsEditor
+  onDestinationChange?: (destination: ConnectionsDestination) => void
 } = {}): React.JSX.Element {
   if (editorProp) {
-    return <ConnectionsSettingsInner editor={editorProp} />
+    return <ConnectionsSettingsInner editor={editorProp} onDestinationChange={onDestinationChange} />
   }
-  return <ConnectionsSettingsWithOwnEditor />
+  return <ConnectionsSettingsWithOwnEditor onDestinationChange={onDestinationChange} />
 }
 
-function ConnectionsSettingsWithOwnEditor(): React.JSX.Element {
+function ConnectionsSettingsWithOwnEditor({
+  onDestinationChange,
+}: {
+  onDestinationChange?: (destination: ConnectionsDestination) => void
+}): React.JSX.Element {
   const { loadNetworkSettings } = useApp()
   const editor = useNetworkSettingsEditor()
   useEffect(() => {
     void loadNetworkSettings()
   }, [loadNetworkSettings])
-  return <ConnectionsSettingsInner editor={editor} />
+  return <ConnectionsSettingsInner editor={editor} onDestinationChange={onDestinationChange} />
 }
 
-function ConnectionsSettingsInner({ editor }: { editor: NetworkSettingsEditor }): React.JSX.Element {
+function ConnectionsSettingsInner({
+  editor,
+  onDestinationChange,
+}: {
+  editor: NetworkSettingsEditor
+  onDestinationChange?: (destination: ConnectionsDestination) => void
+}): React.JSX.Element {
   const [destination, setDestination] = useState<ConnectionsDestination>('overview')
+
+  useEffect(() => {
+    onDestinationChange?.(destination)
+  }, [destination, onDestinationChange])
 
   if (!editor.isLoaded || !editor.draft || !editor.defaults) {
     return (
@@ -118,6 +137,7 @@ function BitcoinNetworkSettingsPage({
   const { testBitcoinConnection } = useApp()
   const [showExpert, setShowExpert] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
+  const [showCoreGuide, setShowCoreGuide] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<import('@renderer/api/types').BitcoinConnectionTestResponse | null>(null)
   const [testError, setTestError] = useState<string | null>(null)
@@ -216,7 +236,18 @@ function BitcoinNetworkSettingsPage({
       )}
 
       {bitcoinServerMode === 'bitcoin_core' && (
-        <SettingsSectionBlock title="Bitcoin Core RPC">
+        <SettingsSectionBlock
+          title="Bitcoin Core RPC"
+          subtitle="Point Coordinator at your local node, then test the connection."
+        >
+          <div className="own-node-guide-row">
+            <p className="muted own-node-guide-blurb">
+              Need help? Open the setup guide for install, bitcoin.conf, and which fields to fill.
+            </p>
+            <button type="button" className="settings-link-btn" onClick={() => setShowCoreGuide(true)}>
+              How to set up →
+            </button>
+          </div>
           <SettingsHostPortField
             label="URL"
             hint="Hostname or IP address — port is entered separately. Local Core uses plain HTTP."
@@ -306,6 +337,7 @@ function BitcoinNetworkSettingsPage({
           onCancel={() => setShowResetConfirm(false)}
         />
       )}
+      {showCoreGuide && <BitcoinCoreOwnNodeGuide onClose={() => setShowCoreGuide(false)} />}
     </SettingsPageLayout>
   )
 }
@@ -380,14 +412,37 @@ function KaspaNetworkSettingsPage({
   editor: ReturnType<typeof useNetworkSettingsEditor>
   onBack: () => void
 }): React.JSX.Element {
+  const { testKaspaConnection } = useApp()
   const [showExpert, setShowExpert] = useState(() => editor.kaspaRpcMode === 'custom')
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [showOwnNodeGuide, setShowOwnNodeGuide] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<import('@renderer/api/types').KaspaConnectionTestResponse | null>(null)
+  const [testError, setTestError] = useState<string | null>(null)
   const { draft, defaults, kaspaRpcMode } = editor
   if (!draft || !defaults) return <p className="muted">Loading…</p>
 
   const chainError =
     editor.savePhase === 'failed' ? saveErrorForChain(editor.saveError, 'kaspa') : null
+
+  async function runConnectionTest(): Promise<void> {
+    setTesting(true)
+    setTestResult(null)
+    setTestError(null)
+    try {
+      const result = await testKaspaConnection({
+        ...defaults!.kaspa,
+        ...draft!.kaspa,
+        rpc_mode: draft!.kaspa.rpc_mode || defaults!.kaspa.rpc_mode,
+        rpc_url: draft!.kaspa.rpc_url ?? defaults!.kaspa.rpc_url,
+      })
+      setTestResult(result)
+    } catch (e) {
+      setTestError(e instanceof Error ? e.message : 'Test failed')
+    } finally {
+      setTesting(false)
+    }
+  }
 
   return (
     <SettingsPageLayout
@@ -412,6 +467,8 @@ function KaspaNetworkSettingsPage({
               onClick={() => {
                 editor.setKaspaMode(mode.id, 'kaspa')
                 if (mode.id === 'custom') setShowExpert(true)
+                setTestResult(null)
+                setTestError(null)
               }}
             />
           )
@@ -439,18 +496,19 @@ function KaspaNetworkSettingsPage({
         })}
 
         {kaspaRpcMode === 'custom' && (
-          <SettingsField
+          <SettingsKaspaWsUrlField
             label="Node WebSocket address"
-            hint="The wrpc endpoint your Kaspa node exposes."
+            hint="Usually a local kaspad Borsh port. Open How to if you need Docker or MyKAI steps."
             value={draft.kaspa.rpc_url}
-            placeholder="wss://…"
-            onChange={(v) =>
+            onChange={(v) => {
               editor.setDraft((current) => {
                 const next = structuredClone(current)
                 next.kaspa.rpc_url = v
                 return next
               }, 'kaspa')
-            }
+              setTestResult(null)
+              setTestError(null)
+            }}
           />
         )}
       </SettingsSectionBlock>
@@ -556,6 +614,15 @@ function KaspaNetworkSettingsPage({
         </button>
       )}
 
+      <div className="settings-test-section">
+        <div className="row" style={{ justifyContent: 'center' }}>
+          <button type="button" className="btn btn-ghost" disabled={testing} onClick={() => void runConnectionTest()}>
+            {testing ? 'Testing…' : 'Test Connection'}
+          </button>
+        </div>
+        <SettingsConnectionTestPanel result={testResult} errorMessage={testError} isRunning={testing} />
+      </div>
+
       <div className="settings-kaspa-footer">
         <SettingsRestoreButton title="Restore recommended Kaspa settings" onClick={() => setShowResetConfirm(true)} />
         <SettingsSaveStatus savePhase={editor.savePhase} saveError={editor.saveError} chain="kaspa" />
@@ -578,7 +645,55 @@ function KaspaNetworkSettingsPage({
   )
 }
 
-function KaspaOwnNodeGuide({ onClose }: { onClose: () => void }): React.JSX.Element {
+function GuideCommandBlock({ text }: { text: string }): React.JSX.Element {
+  const [copied, setCopied] = useState(false)
+
+  async function copyCommand(): Promise<void> {
+    try {
+      if (window.seedmask?.copyText) {
+        await window.seedmask.copyText(text)
+      } else {
+        await navigator.clipboard.writeText(text)
+      }
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  return (
+    <div className="own-node-guide-command-wrap">
+      <pre className="own-node-guide-command">
+        <code>{text}</code>
+      </pre>
+      <button type="button" className="own-node-guide-copy-btn" onClick={() => void copyCommand()}>
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
+  )
+}
+
+const KASPA_DOCKER_COMMAND = `docker run -d \\
+  --name kaspa-node \\
+  --restart unless-stopped \\
+  -v ~/kaspa-data:/app/data \\
+  -p 16111:16111 \\
+  -p 17110:17110 \\
+  kaspanet/rusty-kaspad:latest \\
+  kaspad --utxoindex --disable-upnp --yes \\
+  --rpclisten-borsh=0.0.0.0:17110`
+
+const KASPA_DOCKER_STOP = 'docker stop kaspa-node'
+const KASPA_DOCKER_START = 'docker start kaspa-node'
+const KASPA_DOCKER_PAUSE = 'docker pause kaspa-node'
+const KASPA_DOCKER_UNPAUSE = 'docker unpause kaspa-node'
+
+const BITCOIN_CONF_SNIPPET = `server=1
+rpcbind=127.0.0.1
+rpcallowip=127.0.0.1`
+
+function BitcoinCoreOwnNodeGuide({ onClose }: { onClose: () => void }): React.JSX.Element {
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') onClose()
@@ -587,86 +702,294 @@ function KaspaOwnNodeGuide({ onClose }: { onClose: () => void }): React.JSX.Elem
     return () => window.removeEventListener('keydown', closeOnEscape)
   }, [onClose])
 
-  const openMyKai = (): void => {
+  const openBitcoinCore = (): void => {
+    const url = 'https://bitcoincore.org/en/download/'
     if (window.seedmask?.openExternal) {
-      void window.seedmask.openExternal('https://mykai.dev/')
+      void window.seedmask.openExternal(url)
       return
     }
-    window.open('https://mykai.dev/', '_blank', 'noopener,noreferrer')
+    window.open(url, '_blank', 'noopener,noreferrer')
   }
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div
-        className="modal-card kaspa-node-guide"
+        className="modal-card own-node-guide-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="bitcoin-core-guide-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="own-node-guide-modal-head">
+          <div>
+            <p className="own-node-guide-eyebrow">Bitcoin</p>
+            <h3 id="bitcoin-core-guide-title">How to connect Bitcoin Core</h3>
+            <p className="muted">
+              Think of this as three short jobs: get Core running, turn on RPC, then tell Coordinator where it is.
+            </p>
+          </div>
+          <button type="button" className="btn btn-ghost own-node-guide-close" aria-label="Close" onClick={onClose}>
+            ×
+          </button>
+        </div>
+
+        <div className="own-node-guide-modal-body">
+          <section>
+            <h4>Get Bitcoin Core ready</h4>
+            <p>
+              Download Bitcoin Core from the official site, install it, and open it. The first sync can take many hours
+              — wait until Core shows that it is fully synced before you rely on balances in Coordinator.
+            </p>
+            <button type="button" className="settings-link-btn" onClick={openBitcoinCore}>
+              Official download ↗
+            </button>
+          </section>
+
+          <section>
+            <h4>Turn on RPC (one-time)</h4>
+            <p>
+              Coordinator talks to Core through RPC on this Mac. Add these lines to{' '}
+              <code>bitcoin.conf</code>, then restart Bitcoin Core:
+            </p>
+            <p className="muted own-node-guide-path">
+              Usual file on macOS: <code>~/Library/Application Support/Bitcoin/bitcoin.conf</code>
+            </p>
+            <GuideCommandBlock text={BITCOIN_CONF_SNIPPET} />
+            <p className="muted">
+              You can leave username and password empty. Modern Core creates a <code>.cookie</code> file for login —
+              Coordinator reads it when <strong>Data folder</strong> points at that Bitcoin directory. You do not need{' '}
+              <code>txindex=1</code> for watch-only wallets in Coordinator.
+            </p>
+          </section>
+
+          <section>
+            <h4>Fill in Coordinator</h4>
+            <ul className="own-node-guide-checklist">
+              <li>
+                <strong>URL:</strong> host <code>127.0.0.1</code>, port <code>8332</code>
+              </li>
+              <li>
+                <strong>Data folder:</strong> <code>~/Library/Application Support/Bitcoin</code> (or browse to it)
+              </li>
+              <li>
+                <strong>Username / password:</strong> leave blank if you use the cookie
+              </li>
+              <li>
+                Tap <strong>Test Connection</strong>. When it succeeds, you are done.
+              </li>
+            </ul>
+          </section>
+        </div>
+
+        <div className="own-node-guide-modal-actions">
+          <button type="button" className="btn btn-primary" onClick={onClose}>
+            Back to settings
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function KaspaOwnNodeGuide({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const [showExistingKaspadHelp, setShowExistingKaspadHelp] = useState(false)
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [onClose])
+
+  const openExternal = (url: string): void => {
+    if (window.seedmask?.openExternal) {
+      void window.seedmask.openExternal(url)
+      return
+    }
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="modal-card own-node-guide-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="kaspa-node-guide-title"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="kaspa-node-guide-head">
+        <div className="own-node-guide-modal-head">
           <div>
-            <h3 id="kaspa-node-guide-title">Run your own Kaspa node</h3>
+            <p className="own-node-guide-eyebrow">Kaspa</p>
+            <h3 id="kaspa-node-guide-title">How to run your own Kaspa node</h3>
             <p className="muted">
-              Coordinator uses your node for live balance, UTXOs, sending, and broadcasting. When the node and
-              Coordinator run on the same computer, use <code>ws://127.0.0.1:17110</code>.
+              Your computer verifies Kaspa; Coordinator only asks for balances and broadcast. Signing stays on SeedMask.
             </p>
           </div>
-          <button type="button" className="btn btn-ghost kaspa-node-guide-close" aria-label="Close" onClick={onClose}>
+          <button type="button" className="btn btn-ghost own-node-guide-close" aria-label="Close" onClick={onClose}>
             ×
           </button>
         </div>
 
-        <div className="kaspa-node-guide-content">
+        <div className="own-node-guide-modal-body">
           <section>
-            <h4>Mac or Linux — Docker</h4>
-            <ol>
-              <li>Install and start Docker Desktop (Mac) or Docker Engine (Linux).</li>
-              <li>Run kaspad with its data saved locally and Borsh wRPC exposed on port 17110:</li>
+            <h4>Mac or Linux</h4>
+            <ol className="own-node-guide-numbered">
+              <li>
+                <strong>Install Docker</strong> if needed, open it, wait until it is running.
+                <div className="own-node-guide-inline-links">
+                  <button
+                    type="button"
+                    className="settings-link-btn"
+                    onClick={() => openExternal('https://www.docker.com/products/docker-desktop/')}
+                  >
+                    Docker Desktop (Mac) ↗
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-link-btn"
+                    onClick={() => openExternal('https://docs.docker.com/engine/install/')}
+                  >
+                    Docker Engine (Linux) ↗
+                  </button>
+                </div>
+              </li>
+              <li>
+                <strong>Open Terminal</strong> (Mac: Spotlight → “Terminal”; Linux: your terminal app).
+              </li>
+              <li>
+                <strong>Copy, paste, Enter</strong> — once. First run downloads the image (a few minutes).
+                <GuideCommandBlock text={KASPA_DOCKER_COMMAND} />
+                <p className="muted own-node-guide-note">
+                  Creates <code>kaspa-node</code>, stores data in <code>~/kaspa-data</code>, opens port{' '}
+                  <code>17110</code>. No need to run again unless you delete the container.
+                </p>
+              </li>
+              <li>
+                <strong>Wait for sync.</strong> First sync can take a while; balances may look empty until it finishes.
+              </li>
             </ol>
-            <pre className="kaspa-node-guide-command">
-              <code>{`docker run -d \\
-  --name kaspa-node \\
-  --restart unless-stopped \\
-  -v ~/kaspa-data:/app/data \\
-  -p 16111:16111 \\
-  -p 17110:17110 \\
-  kaspanet/rusty-kaspad:latest \\
-  kaspad --utxoindex --disable-upnp --yes \\
-  --rpclisten-borsh=0.0.0.0:17110`}</code>
-            </pre>
-            <p className="muted">
-              Wait for the node to sync. Close this guide, then enter <code>ws://127.0.0.1:17110</code> in the{' '}
-              <strong>Node WebSocket address</strong> field. If you already run kaspad, do not start a second
-              container—just ensure port 17110 and the Borsh option are enabled.
+
+            <div className="own-node-guide-note own-node-guide-expand">
+              <p className="muted own-node-guide-note">
+                <strong>Already run kaspad yourself?</strong>{' '}
+                <button
+                  type="button"
+                  className="settings-link-btn"
+                  aria-expanded={showExistingKaspadHelp}
+                  onClick={() => setShowExistingKaspadHelp((open) => !open)}
+                >
+                  {showExistingKaspadHelp ? 'See less' : 'See more'}
+                </button>
+              </p>
+              {showExistingKaspadHelp ? (
+                <p className="muted own-node-guide-note">
+                  Skip the Docker steps above — do not start a second node. Stop your current kaspad, then start it
+                  again with these two options added (same as the Docker command uses): <code>--utxoindex</code> and{' '}
+                  <code>--rpclisten-borsh=0.0.0.0:17110</code>. After it is synced, use{' '}
+                  <code>ws://127.0.0.1:17110</code> in Coordinator. If you are using the Docker command, you can ignore
+                  this.
+                </p>
+              ) : null}
+            </div>
+            <p className="muted own-node-guide-note">
+              <strong>Windows:</strong> install{' '}
+              <button type="button" className="settings-link-btn" onClick={() => openExternal('https://mykai.dev/')}>
+                MyKAI ↗
+              </button>
+              , start the node, wait for sync, then use <code>ws://127.0.0.1:17110</code> (Borsh wRPC).
             </p>
           </section>
 
           <section>
-            <h4>Windows — MyKAI</h4>
-            <p>
-              Install and start the one-click node, wait for it to sync, then use{' '}
-              <code>ws://127.0.0.1:17110</code>. MyKAI must expose Borsh wRPC on port 17110.
-            </p>
-            <button type="button" className="settings-link-btn kaspa-node-guide-link" onClick={openMyKai}>
-              Open mykai.dev ↗
-            </button>
+            <h4>Connect Coordinator</h4>
+            <ul className="own-node-guide-checklist">
+              <li>
+                Stay on <strong>Connections → Kaspa</strong> and select <strong>Your own node</strong>
+              </li>
+              <li>
+                Set <strong>Node WebSocket address</strong> to <code>ws://127.0.0.1:17110</code>
+              </li>
+              <li>
+                Tap <strong>Test Connection</strong>. When it succeeds (or says syncing), you are on the right path.
+              </li>
+              <li>Keep that setting — live balance, coins, send, and broadcast use your node</li>
+              <li>
+                History is optional: <strong>None</strong> (most private), public API, or your own history server
+              </li>
+            </ul>
           </section>
 
-          <section className="kaspa-node-guide-history">
-            <h4>Transaction history is separate</h4>
-            <p>
-              A kaspad node does not provide indexed wallet history. Under Transaction history choose{' '}
-              <strong>None (private)</strong> (no third-party queries), <strong>Public</strong> (
-              <code>https://api.kaspa.org</code> — finds past activity; the API sees queried addresses), or a{' '}
-              <strong>Private history API</strong> you host.
+          <details
+            className="own-node-guide-disclosure"
+            onToggle={(event) => {
+              if (!event.currentTarget.open) return
+              const panel = event.currentTarget
+              window.requestAnimationFrame(() => {
+                window.requestAnimationFrame(() => {
+                  panel.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' })
+                })
+              })
+            }}
+          >
+            <summary className="own-node-guide-disclosure-summary">
+              <h4>Useful later</h4>
+              <span className="own-node-guide-chevron" aria-hidden />
+            </summary>
+            <div className="own-node-guide-disclosure-body">
+            <ol className="own-node-guide-numbered">
+              <li>
+                <strong>Docker resources (Mac)</strong> — Docker Desktop → <strong>Settings → Resources</strong>.
+                <p className="muted own-node-guide-note">
+                  Use CPU <strong>3</strong>, Memory <strong>5 GB</strong>, Swap <strong>1 GB</strong>, then Apply.
+                  Lower settings often make catch-up crawl or look stuck. You can lower resources again when the node is
+                  synced and you want the Mac snappier. Changing these does not wipe <code>~/kaspa-data</code>.
+                </p>
+              </li>
+              <li>
+                <strong>Turn the node off and on</strong> — use stop / start for everyday use (closing the lid for a
+                while, freeing Mac memory, finishing for the day).
+                <p className="muted own-node-guide-note">
+                  Stop shuts the node down cleanly. Start brings the same container back. Data stays in{' '}
+                  <code>~/kaspa-data</code> — do not run the first-time <code>docker run</code> command again.
+                  Overnight or a day off, catch-up is usually short. After several days or weeks off, Kaspa is so fast
+                  that catch-up can take hours and feel like a full sync. That is normal.
+                </p>
+                <div className="own-node-guide-command-stack">
+                  <GuideCommandBlock text={KASPA_DOCKER_STOP} />
+                  <GuideCommandBlock text={KASPA_DOCKER_START} />
+                </div>
+              </li>
+              <li>
+                <strong>Short pause only</strong> — freeze / unfreeze without a full shutdown (quick break).
+                <p className="muted own-node-guide-note">
+                  Pause keeps the process in memory. Prefer stop / start if you will be away longer or the Mac feels
+                  slow.
+                </p>
+                <div className="own-node-guide-command-stack">
+                  <GuideCommandBlock text={KASPA_DOCKER_PAUSE} />
+                  <GuideCommandBlock text={KASPA_DOCKER_UNPAUSE} />
+                </div>
+              </li>
+              <li>
+                <strong>Leave Docker running in the background</strong> — close Docker Desktop with the window{' '}
+                <strong>×</strong>. Do not Quit Docker from the menu if you want <code>kaspa-node</code> to keep
+                running.
+              </li>
+            </ol>
+
+            <p className="muted own-node-guide-note">
+              <strong>Optional:</strong> copy <code>~/kaspa-data</code> only if you might wipe Docker or reinstall the
+              Mac. Stop the node first. That copy will not skip a long catch-up after days off.
             </p>
-          </section>
+            </div>
+          </details>
         </div>
 
-        <div className="kaspa-node-guide-actions">
+        <div className="own-node-guide-modal-actions">
           <button type="button" className="btn btn-primary" onClick={onClose}>
-            Got it
+            Back to settings
           </button>
         </div>
       </div>

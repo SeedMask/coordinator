@@ -278,7 +278,7 @@ def _pskt_input_from_utxo(cfg: WalletConfig, utxo: WalletUtxo) -> dict[str, Any]
 
 
 def _bip45_device_account_hint(derivation: str) -> int:
-    """SeedPass UI account index from cosigner path (m/45'/111111'/N')."""
+    """SeedMask UI account index from cosigner path (m/45'/111111'/N')."""
     parts = (derivation or "").strip().lower().split("/")
     for part in reversed(parts):
         if part.endswith("'") and part[:-1].isdigit():

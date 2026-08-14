@@ -84,7 +84,7 @@ export function WalletTxDetailSheet({
   api: APIClient
   onClose: () => void
 }): React.JSX.Element {
-  const { networkSettings, loadTransactions, transactions } = useApp()
+  const { networkSettings, loadTransactions, transactions, noteKaspaTxConfirmations } = useApp()
   const id = txId(tx)
   // Prefer the live dashboard row — AppProvider keeps confirmations climbing there.
   const liveTx = useMemo(() => {
@@ -106,10 +106,23 @@ export function WalletTxDetailSheet({
   modelRef.current = model
   const liveTxRef = useRef(liveTx)
   liveTxRef.current = liveTx
+  /** Highest confirmation shown this session — survives visualize reloads. */
+  const highWaterConfRef = useRef(0)
 
   useEffect(() => {
     ignoreBackdropUntil.current = Date.now() + 400
   }, [id, walletId])
+
+  useEffect(() => {
+    highWaterConfRef.current = Math.max(0, Math.floor(Number(liveTx.confirmations) || 0))
+  }, [id])
+
+  useEffect(() => {
+    highWaterConfRef.current = Math.max(
+      highWaterConfRef.current,
+      Math.floor(Number(liveTx.confirmations) || 0),
+    )
+  }, [liveTx.confirmations])
 
   useEffect(() => {
     setTxidCopied(false)
@@ -140,7 +153,21 @@ export function WalletTxDetailSheet({
         const res = await api.walletTxVisualize(walletId, id)
         if (cancelled) return
         setCachedTxVisualize(walletId, id, res)
-        setModel(modelFromApi(res, chain, false, bitcoinDisplayUnit))
+        setModel((prev) => {
+          const next = modelFromApi(res, chain, false, bitcoinDisplayUnit)
+          if (!prev || chain !== 'kaspa') return next
+          // Never let a fresh visualize payload rewind the confirmation high-water mark.
+          const keep = Math.max(
+            highWaterConfRef.current,
+            metadataNumber(prev, 'Confirmations'),
+            Math.floor(Number(liveTxRef.current.confirmations) || 0),
+          )
+          const incoming = metadataNumber(next, 'Confirmations')
+          if (keep > incoming) {
+            return upsertMetadata(next, [{ label: 'Confirmations', value: formatConf(keep) }])
+          }
+          return next
+        })
         if (!liveTx.counterparty?.trim()) {
           void loadTransactions()
         }
@@ -158,24 +185,25 @@ export function WalletTxDetailSheet({
     }
   }, [api, bitcoinDisplayUnit, chain, id, walletId, loadTransactions, liveTx.counterparty])
 
-  // Keep the On-chain Confirmations row in sync with the live wallet row (dashboard paint).
+  // Keep the On-chain Confirmations row in sync with the live wallet row.
   useEffect(() => {
     if (chain !== 'kaspa') return
     const conf = Math.max(0, Math.floor(Number(liveTx.confirmations) || 0))
     const accepting = Math.max(0, Math.floor(Number(liveTx.accepting_block_blue_score) || 0))
     if (conf <= 0 && accepting <= 0) return
+    highWaterConfRef.current = Math.max(highWaterConfRef.current, conf)
     setModel((prev) => {
       if (!prev) return prev
       const cur = metadataNumber(prev, 'Confirmations')
       const patches: Array<{ label: string; value: string }> = []
-      // Never pull the live detail count backwards (dashboard soft-caps around 200).
       if (conf > cur) patches.push({ label: 'Confirmations', value: formatConf(conf) })
       if (accepting > 0) patches.push({ label: 'Blue score', value: formatConf(accepting) })
       return patches.length ? upsertMetadata(prev, patches) : prev
     })
   }, [chain, liveTx.confirmations, liveTx.accepting_block_blue_score])
 
-  // While details are open, keep climbing with tip − blue score (no soft cap).
+  // While details are open, keep climbing smoothly at ~10 BPS (same as Automatic).
+  // Persist high-water so reopen continues instead of restarting the climb.
   useEffect(() => {
     if (!id || chain !== 'kaspa') return
     let cancelled = false
@@ -206,19 +234,29 @@ export function WalletTxDetailSheet({
       return acceptingRef.score
     }
 
+    const knownConfirmations = (): number =>
+      Math.max(
+        highWaterConfRef.current,
+        Math.floor(Number(liveTxRef.current.confirmations) || 0),
+        metadataNumber(modelRef.current, 'Confirmations'),
+      )
+
     const writeConfirmations = (conf: number, accepting: number): void => {
       const next = Math.max(1, Math.floor(conf))
+      highWaterConfRef.current = Math.max(highWaterConfRef.current, next)
+      const shown = highWaterConfRef.current
+      noteKaspaTxConfirmations(walletId, id, shown, accepting > 0 ? accepting : undefined)
       setModel((prev) => {
         if (!prev) return prev
         const cur = metadataNumber(prev, 'Confirmations')
-        if (next <= cur) {
+        if (shown <= cur) {
           if (accepting > 0 && metadataNumber(prev, 'Blue score') <= 0) {
             return upsertMetadata(prev, [{ label: 'Blue score', value: formatConf(accepting) }])
           }
           return prev
         }
         const patches: Array<{ label: string; value: string }> = [
-          { label: 'Confirmations', value: formatConf(next) },
+          { label: 'Confirmations', value: formatConf(shown) },
         ]
         if (accepting > 0) patches.push({ label: 'Blue score', value: formatConf(accepting) })
         return upsertMetadata(prev, patches)
@@ -230,7 +268,7 @@ export function WalletTxDetailSheet({
       const accepting = resolveAccepting()
       if (accepting <= 0) return
       if (paintRef.tip <= 0) {
-        const known = Math.max(0, Number(liveTxRef.current.confirmations) || 0)
+        const known = knownConfirmations()
         if (known > 0) noteTip(accepting + known)
       }
       if (paintRef.tip <= 0) return
@@ -259,7 +297,7 @@ export function WalletTxDetailSheet({
           const conf = Number(update?.confirmations) || 0
           if (accepting > 0 && conf > 0) noteTip(Math.max(paintTipNow(), accepting + conf))
         } else {
-          const known = Math.max(0, Number(liveTxRef.current.confirmations) || 0)
+          const known = knownConfirmations()
           const accepting = resolveAccepting()
           if (accepting > 0 && known > 0) noteTip(Math.max(paintTipNow(), accepting + known))
         }
@@ -282,7 +320,7 @@ export function WalletTxDetailSheet({
       window.clearInterval(paintTimer)
       window.clearInterval(sampleTimer)
     }
-  }, [api, chain, id, walletId])
+  }, [api, chain, id, walletId, noteKaspaTxConfirmations])
 
   // Bitcoin: refresh Confirmations while the sheet is open.
   useEffect(() => {

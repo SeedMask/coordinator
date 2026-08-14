@@ -293,8 +293,17 @@ export function makeAssetFlowChartLayout(
   allTransactions: import('@renderer/api/types').WalletTxDTO[] = [],
   periodStart: Date | null = null,
   period: AssetHistoryPeriod = '1M',
+  walletAddresses: ReadonlySet<string> = new Set(),
+  chain: import('@renderer/api/types').CoinChain = 'kaspa',
 ): AssetFlowChartLayout {
-  const series = balanceSeries(events, currentBalance, allTransactions, periodStart)
+  const series = balanceSeries(
+    events,
+    currentBalance,
+    allTransactions,
+    periodStart,
+    walletAddresses,
+    chain,
+  )
   const { min: balanceMin, max: balanceMax, ticks: rawBalanceTicks } = balanceScale(series, useSats)
   const provisionalAxisW = yAxisWidth(rawBalanceTicks, useSats)
   const leading = provisionalAxisW + 12

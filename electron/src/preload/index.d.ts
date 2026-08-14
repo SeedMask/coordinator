@@ -218,6 +218,87 @@ declare global {
         result?: { format: 'bitcoin_psbt'; psbt_base64: string }
         error?: string
       }>
+      getUpdaterStatus: () => Promise<{
+        phase: string
+        currentVersion: string
+        availableVersion?: string
+        percent?: number
+        error?: string
+        feed?: string
+        packaged: boolean
+        message?: string
+        demo?: boolean
+        releaseNotes?: string
+        releaseUrl?: string
+      }>
+      checkForUpdates: () => Promise<{
+        phase: string
+        currentVersion: string
+        availableVersion?: string
+        percent?: number
+        error?: string
+        feed?: string
+        packaged: boolean
+        message?: string
+        demo?: boolean
+        releaseNotes?: string
+        releaseUrl?: string
+      }>
+      downloadUpdate: () => Promise<{
+        phase: string
+        currentVersion: string
+        availableVersion?: string
+        percent?: number
+        error?: string
+        feed?: string
+        packaged: boolean
+        message?: string
+        demo?: boolean
+        releaseNotes?: string
+        releaseUrl?: string
+      }>
+      installUpdate: () => Promise<{ ok: boolean; error?: string }>
+      applyUpdate: () => Promise<{
+        phase: string
+        currentVersion: string
+        availableVersion?: string
+        percent?: number
+        error?: string
+        feed?: string
+        packaged: boolean
+        message?: string
+        demo?: boolean
+        releaseNotes?: string
+        releaseUrl?: string
+      }>
+      dismissWhatsNew: () => Promise<{
+        phase: string
+        currentVersion: string
+        availableVersion?: string
+        percent?: number
+        error?: string
+        feed?: string
+        packaged: boolean
+        message?: string
+        demo?: boolean
+        releaseNotes?: string
+        releaseUrl?: string
+      }>
+      onUpdaterEvent: (
+        cb: (status: {
+          phase: string
+          currentVersion: string
+          availableVersion?: string
+          percent?: number
+          error?: string
+          feed?: string
+          packaged: boolean
+          message?: string
+          demo?: boolean
+          releaseNotes?: string
+          releaseUrl?: string
+        }) => void,
+      ) => () => void
     }
   }
 }

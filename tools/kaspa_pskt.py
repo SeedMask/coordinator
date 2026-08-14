@@ -15,7 +15,7 @@ from kaspa_coordinator_qr import build_unsigned_v2, kaspa_address_to_script_hex,
 KASPA_COIN_TYPE = 111111
 PSKT_PREFIX = "PSKT"
 PSKB_PREFIX = "PSKB"
-DRAFT_FORMAT = "seedpass_pskt_draft_v1"
+DRAFT_FORMAT = "seedmask_pskt_draft_v1"
 PSKT_VERSION_ONE = 1
 SIG_HASH_ALL = 1
 DEFAULT_TX_VERSION = 0
@@ -184,12 +184,12 @@ def _address_for_signing(kpub: str, sign_chain: int, sign_index: int) -> str:
         return ""
 
 
-def _legacy_seedpass_props(pskt: dict[str, Any]) -> dict[str, str]:
+def _legacy_seedmask_props(pskt: dict[str, Any]) -> dict[str, str]:
     g = pskt.get("global") or {}
-    out = {str(k): str(v) for k, v in (g.get("proprietaries") or {}).items() if str(k).startswith("seedpass/")}
+    out = {str(k): str(v) for k, v in (g.get("proprietaries") or {}).items() if str(k).startswith("seedmask/")}
     if pskt.get("inputs"):
         ip = (pskt["inputs"][0].get("proprietaries") or {})
-        out.update({str(k): str(v) for k, v in ip.items() if str(k).startswith("seedpass/")})
+        out.update({str(k): str(v) for k, v in ip.items() if str(k).startswith("seedmask/")})
     return out
 
 
@@ -200,8 +200,8 @@ def _kpub_from_pskt(pskt: dict[str, Any], kpub: str = "") -> str:
     xpubs = (pskt.get("global") or {}).get("xpubs") or {}
     if isinstance(xpubs, dict) and xpubs:
         return next(iter(xpubs.keys())).strip()
-    legacy = _legacy_seedpass_props(pskt)
-    return (legacy.get("seedpass/kpub") or "").strip()
+    legacy = _legacy_seedmask_props(pskt)
+    return (legacy.get("seedmask/kpub") or "").strip()
 
 
 def _account_from_pskt(pskt: dict[str, Any], account: int | None = None) -> int:
@@ -214,9 +214,9 @@ def _account_from_pskt(pskt: dict[str, Any], account: int | None = None) -> int:
                 acct, _, _ = _parse_derivation_path(str(src.get("derivationPath", "")))
                 if acct is not None:
                     return acct
-    legacy = _legacy_seedpass_props(pskt)
+    legacy = _legacy_seedmask_props(pskt)
     try:
-        return int(legacy.get("seedpass/account", 0))
+        return int(legacy.get("seedmask/account", 0))
     except (TypeError, ValueError):
         return 0
 
@@ -230,8 +230,8 @@ def _sign_path_from_input(inp: dict[str, Any], account: int) -> tuple[int, int]:
                 if chain is not None and index is not None:
                     return int(chain), int(index)
     legacy = {str(k): str(v) for k, v in (inp.get("proprietaries") or {}).items()}
-    if legacy.get("seedpass/signChain") is not None:
-        return int(legacy.get("seedpass/signChain", 0)), int(legacy.get("seedpass/signAddressIndex", 0))
+    if legacy.get("seedmask/signChain") is not None:
+        return int(legacy.get("seedmask/signChain", 0)), int(legacy.get("seedmask/signAddressIndex", 0))
     return 0, 0
 
 
@@ -353,7 +353,7 @@ def pskt_to_seedmask_v2(
     input after a single SeedMask approval).
     """
     g = pskt.get("global") or {}
-    legacy = _legacy_seedpass_props(pskt)
+    legacy = _legacy_seedmask_props(pskt)
     acct = _account_from_pskt(pskt, account)
     kp = _kpub_from_pskt(pskt, kpub)
 
@@ -374,7 +374,7 @@ def pskt_to_seedmask_v2(
             entry["kaspa_address"] = ""
         outs_v2.append(entry)
 
-    net = legacy.get("seedpass/network") or network
+    net = legacy.get("seedmask/network") or network
     inputs_v2: list[dict[str, Any]] = []
     for inp in inputs_pskt:
         if not isinstance(inp, dict):
@@ -388,7 +388,7 @@ def pskt_to_seedmask_v2(
             receive = _address_for_signing(kp, sign_chain, sign_index)
         # Legacy single-input props only apply to the first input.
         if not receive and not inputs_v2:
-            receive = (legacy.get("seedpass/receiveAddress") or "").strip()
+            receive = (legacy.get("seedmask/receiveAddress") or "").strip()
         input_v2: dict[str, Any] = {
             "prev_tx_id": str(prev.get("transactionId", "")),
             "prev_index": int(prev.get("index", 0)),
@@ -914,14 +914,14 @@ def pskt_signed_to_ready_v2(
             multisig_ready = True
             continue
         props = inp.get("proprietaries") or {}
-        if props.get("seedpass/sigHex"):
-            sigs[i] = props["seedpass/sigHex"]
+        if props.get("seedmask/sigHex"):
+            sigs[i] = props["seedmask/sigHex"]
             continue
         sig_hex = _sig_hex_from_partial_sigs(inp.get("partialSigs") or {})
         if sig_hex:
             sigs[i] = sig_hex
     if multisig_ready:
-        v2["seedpass_signed"] = True
+        v2["seedmask_signed"] = True
         return v2
     if not sigs:
         raise ValueError("PSKT has no signatures — scan signed JSON from SeedMask first")
@@ -946,7 +946,7 @@ def validate_rusty_pskt_shape(pskt: dict[str, Any]) -> list[str]:
         if isinstance(scope, dict):
             props = scope.get("proprietaries") or {}
             for pk in props:
-                if str(pk).startswith("seedpass/"):
+                if str(pk).startswith("seedmask/"):
                     issues.append(f"non-standard proprietary key in exported PSKT: {pk}")
     for inp in pskt.get("inputs") or []:
         if not isinstance(inp, dict):

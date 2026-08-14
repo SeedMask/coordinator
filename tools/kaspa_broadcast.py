@@ -29,7 +29,7 @@ except ImportError:
 
 
 def wrap_schnorr_signature_script(sig_hex: str) -> bytes:
-    """SeedPass emits 64-byte BIP-340 sig (128 hex). Kaspa expects push + sig + SIGHASH_ALL."""
+    """SeedMask emits 64-byte BIP-340 sig (128 hex). Kaspa expects push + sig + SIGHASH_ALL."""
     sig_hex = sig_hex.strip().lower()
     if len(sig_hex) == 128:
         return bytes.fromhex("41" + sig_hex + "01")
@@ -277,8 +277,8 @@ async def ready_to_transaction(ready: dict, client=None) -> tuple:
     from kaspa import NetworkId, calculate_transaction_mass, update_transaction_mass
     from kaspa_toccata import build_transaction_input, build_transaction_output, tx_version_from_unsigned
 
-    if not ready.get("seedpass_signed"):
-        print("Warning: seedpass_signed flag missing — is this a merged ready.json?", file=sys.stderr)
+    if not ready.get("seedmask_signed"):
+        print("Warning: seedmask_signed flag missing — is this a merged ready.json?", file=sys.stderr)
 
     default_receive = ""
     for inp in ready.get("inputs") or []:

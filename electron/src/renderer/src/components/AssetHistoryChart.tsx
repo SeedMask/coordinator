@@ -20,6 +20,7 @@ import {
   walletTransactionsInPeriod,
   periodStartDate,
   periodSummaryTitle,
+  sendFeesInPeriod,
 } from '@renderer/utils/assetHistory'
 import {
   makeAssetFlowChartLayout,
@@ -41,6 +42,8 @@ function structuralChartTxs(transactions: WalletTxDTO[]): WalletTxDTO[] {
     amount_sats: tx.amount_sats,
     amount_kas: tx.amount_kas,
     amount_sompi: tx.amount_sompi,
+    fee_sompi: tx.fee_sompi,
+    fee_sats: tx.fee_sats,
     block_time: tx.block_time,
     counterparty: tx.counterparty ?? undefined,
   }))
@@ -54,6 +57,7 @@ function structuralChartSig(transactions: WalletTxDTO[]): string {
         id,
         (tx.direction ?? '').trim().toLowerCase(),
         String(txAmount(tx)),
+        String(tx.fee_sompi ?? tx.fee_sats ?? 0),
         String(txBlockTime(tx)),
         (tx.counterparty ?? '').trim(),
       ].join(':')
@@ -177,7 +181,9 @@ export function AssetHistoryChart(): React.JSX.Element {
   const totalOutflow = events
     .filter((e) => !e.isInflow)
     .reduce((s, e) => s + flowAmount(e), 0)
-  const netFlow = totalInflow - totalOutflow
+  const totalFeesCoin = sendFeesInPeriod(chartTransactions, periodStart, chartChain)
+  const totalFees = useSats ? totalFeesCoin * 100_000_000 : totalFeesCoin
+  const netFlow = totalInflow - totalOutflow - totalFees
 
   const netFlowText =
     Math.abs(netFlow) < (useSats ? 0.5 : 1e-8)
@@ -267,6 +273,7 @@ export function AssetHistoryChart(): React.JSX.Element {
               title="Net"
               value={netFlowText}
               tint={Math.abs(netFlow) < 1e-9 ? 'neutral' : netFlow > 0 ? 'inflow' : 'outflow'}
+              tooltip="In minus Out, including network fees paid on sends."
             />
           </div>
         )}
@@ -318,6 +325,7 @@ export function AssetHistoryChart(): React.JSX.Element {
             setHoverFocus={setHoverFocus}
             allTransactions={chartTransactions}
             periodStart={periodStart}
+            walletAddresses={walletAddresses}
           />
         </div>
       )}
@@ -375,6 +383,7 @@ function ChartPlot({
   setHoverFocus,
   allTransactions,
   periodStart,
+  walletAddresses,
 }: {
   events: AssetFlowEvent[]
   period: AssetHistoryPeriod
@@ -387,6 +396,7 @@ function ChartPlot({
   setHoverFocus: (f: ChartHoverFocus) => void
   allTransactions: import('@renderer/api/types').WalletTxDTO[]
   periodStart: Date | null
+  walletAddresses: ReadonlySet<string>
 }): React.JSX.Element {
   const { displayCurrency, sidebarSelection } = useApp()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -405,8 +415,19 @@ function ChartPlot({
   }, [sidebarSelection, events.length])
 
   const layout = useMemo(
-    () => makeAssetFlowChartLayout(size, events, currentBalance, useSats, allTransactions, periodStart, period),
-    [size, events, currentBalance, useSats, allTransactions, periodStart, period],
+    () =>
+      makeAssetFlowChartLayout(
+        size,
+        events,
+        currentBalance,
+        useSats,
+        allTransactions,
+        periodStart,
+        period,
+        walletAddresses,
+        chartChain,
+      ),
+    [size, events, currentBalance, useSats, allTransactions, periodStart, period, walletAddresses, chartChain],
   )
 
   const pointsToPath = (pts: Array<{ x: number; y: number }>) =>

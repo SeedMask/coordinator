@@ -18,7 +18,7 @@ No Python, Node, or terminal setup is required. Everything runs inside the app.
 4. Scan the QR or paste the key into the coordinator.
 5. Wait for the mainnet scan to finish — your balance and coins appear on the dashboard.
 
-**Privacy:** Only watch-only public keys are stored on your Mac (`~/.seedpass-coordinator/`). Your seed never leaves SeedMask.
+**Privacy:** Only watch-only public keys are stored on your Mac (`~/.seedmask-coordinator/`). Your seed never leaves SeedMask.
 
 ## Send Kaspa
 

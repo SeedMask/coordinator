@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import urllib.parse
 from collections import defaultdict
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import httpx
 
 from .kaspa_service import SOMPI_PER_KAS, WalletUtxo, _normalize_kaspa_addr
-from .network_settings import load_network_settings
+from .network_settings import KaspaNetworkSettings, load_network_settings
 from .wallet_store import WalletConfig
 
 TX_LIMIT_PER_ADDRESS = 500
@@ -185,13 +186,27 @@ def _dedupe_tx_dicts(rows: list[dict]) -> list[dict]:
     return sorted(by_id.values(), key=sort_key)
 
 
+# One-shot public history for a single import/discover (does not change Connections).
+_kaspa_history_once_public: ContextVar[bool] = ContextVar("kaspa_history_once_public", default=False)
+
+
 def _kaspa_history_base() -> str:
+    if _kaspa_history_once_public.get():
+        return KaspaNetworkSettings.history_api_base.rstrip("/")
     return load_network_settings().kaspa.history_api_base
 
 
 def _kaspa_history_enabled() -> bool:
+    if _kaspa_history_once_public.get():
+        return True
     settings = load_network_settings().kaspa
     return settings.history_mode in {"public", "custom"} and bool(settings.history_api_base)
+
+
+def _kaspa_uses_own_node() -> bool:
+    """True when Connections → Kaspa is Your own node (custom RPC)."""
+    settings = load_network_settings().kaspa
+    return (settings.rpc_mode or "").strip().lower() == "custom" and bool((settings.rpc_url or "").strip())
 
 
 _Kaspa_Tip_CACHE: tuple[int, float] | None = None
@@ -200,6 +215,30 @@ _Kaspa_Tip_TTL_SEC = 0.05
 _KASPA_BPS = 10
 _kaspa_http: httpx.AsyncClient | None = None
 _kaspa_tip_pump_task: asyncio.Task | None = None
+
+
+def clear_kaspa_tip_cache() -> None:
+    """Drop cached tip when network settings change (Automatic ↔ own node)."""
+    global _Kaspa_Tip_CACHE
+    _Kaspa_Tip_CACHE = None
+
+
+def _store_kaspa_tip(tip: int, now: float, *, allow_lower: bool = False) -> int:
+    """Update tip cache. Own-node tips may replace a higher stale explorer sample."""
+    global _Kaspa_Tip_CACHE
+    if tip <= 0:
+        return _Kaspa_Tip_CACHE[0] if _Kaspa_Tip_CACHE is not None else 0
+    prev = _Kaspa_Tip_CACHE[0] if _Kaspa_Tip_CACHE is not None else 0
+    if tip >= prev or allow_lower:
+        _Kaspa_Tip_CACHE = (tip, now)
+        return tip
+    return prev
+
+
+async def _kaspa_rpc_sink_blue_score() -> int:
+    from .kaspa_service import get_service
+
+    return int(await get_service().get_sink_blue_score() or 0)
 
 
 def _kaspa_http_client() -> httpx.AsyncClient:
@@ -215,9 +254,29 @@ def _kaspa_http_client() -> httpx.AsyncClient:
 
 
 async def _kaspa_virtual_blue_score(*, force: bool = False) -> int:
-    """Current VSPC blue score (tip) for confirmation depth."""
+    """Current VSPC blue score (tip) for confirmation depth.
+
+    Own node → kaspad getSinkBlueScore (works with History off).
+    Automatic → public history API (unchanged).
+    """
     global _Kaspa_Tip_CACHE
     import time
+
+    if _kaspa_uses_own_node():
+        now = time.monotonic()
+        if (
+            not force
+            and _Kaspa_Tip_CACHE is not None
+            and now - _Kaspa_Tip_CACHE[1] < _Kaspa_Tip_TTL_SEC
+        ):
+            return _Kaspa_Tip_CACHE[0]
+        try:
+            tip = await _kaspa_rpc_sink_blue_score()
+            return _store_kaspa_tip(tip, now, allow_lower=True)
+        except Exception:
+            if _Kaspa_Tip_CACHE is not None:
+                return _Kaspa_Tip_CACHE[0]
+            return 0
 
     if not _kaspa_history_enabled():
         return 0
@@ -236,12 +295,7 @@ async def _kaspa_virtual_blue_score(*, force: bool = False) -> int:
         data = resp.json()
         tip = int(data.get("blueScore") or data.get("blue_score") or 0)
         if tip > 0:
-            # Tip is monotonic on the network; never store a lower sample.
-            prev = _Kaspa_Tip_CACHE[0] if _Kaspa_Tip_CACHE is not None else 0
-            if tip >= prev:
-                _Kaspa_Tip_CACHE = (tip, now)
-                return tip
-            return prev
+            return _store_kaspa_tip(tip, now, allow_lower=False)
     except Exception:
         pass
     if _Kaspa_Tip_CACHE is not None:
@@ -252,14 +306,21 @@ async def _kaspa_virtual_blue_score(*, force: bool = False) -> int:
 async def _kaspa_tip_pump_loop() -> None:
     """Keep tip cache warm so UI tip polls are local/instant (~no explorer RTT)."""
     while True:
-        if not _kaspa_history_enabled():
-            await asyncio.sleep(1.0)
-            continue
         try:
-            await _kaspa_virtual_blue_score_fast()
-        except Exception:
-            pass
-        try:
+            if _kaspa_uses_own_node():
+                try:
+                    await _kaspa_virtual_blue_score_fast()
+                except Exception:
+                    pass
+                await asyncio.sleep(0.25)
+                continue
+            if not _kaspa_history_enabled():
+                await asyncio.sleep(1.0)
+                continue
+            try:
+                await _kaspa_virtual_blue_score_fast()
+            except Exception:
+                pass
             await asyncio.sleep(0.08)
         except Exception:
             return
@@ -268,7 +329,7 @@ async def _kaspa_tip_pump_loop() -> None:
 def ensure_kaspa_tip_pump() -> None:
     """Start background tip refresher once (safe to call from any request)."""
     global _kaspa_tip_pump_task
-    if not _kaspa_history_enabled():
+    if not _kaspa_uses_own_node() and not _kaspa_history_enabled():
         return
     try:
         loop = asyncio.get_running_loop()
@@ -541,8 +602,19 @@ async def get_kaspa_tip_blue(*, force: bool = True) -> dict:
 
 async def _kaspa_virtual_blue_score_fast() -> int:
     """Tip fetch with a short timeout for the UI poller / tip pump."""
-    global _Kaspa_Tip_CACHE
     import time
+
+    if _kaspa_uses_own_node():
+        now = time.monotonic()
+        if _Kaspa_Tip_CACHE is not None and now - _Kaspa_Tip_CACHE[1] < 0.05:
+            return _Kaspa_Tip_CACHE[0]
+        try:
+            tip = await _kaspa_rpc_sink_blue_score()
+            return _store_kaspa_tip(tip, now, allow_lower=True)
+        except Exception:
+            if _Kaspa_Tip_CACHE is not None:
+                return _Kaspa_Tip_CACHE[0]
+            return 0
 
     if not _kaspa_history_enabled():
         return 0
@@ -557,11 +629,7 @@ async def _kaspa_virtual_blue_score_fast() -> int:
         data = resp.json()
         tip = int(data.get("blueScore") or data.get("blue_score") or 0)
         if tip > 0:
-            prev = _Kaspa_Tip_CACHE[0] if _Kaspa_Tip_CACHE is not None else 0
-            if tip >= prev:
-                _Kaspa_Tip_CACHE = (tip, now)
-                return tip
-            return prev
+            return _store_kaspa_tip(tip, now, allow_lower=False)
     except Exception:
         pass
     if _Kaspa_Tip_CACHE is not None:
@@ -851,6 +919,29 @@ def _classify_kaspa_tx(
     if amount <= 0:
         return None
 
+    fee_sompi: int | None = None
+    if direction == "sent" and wallet_input_count > 0:
+        # Prefer Σinputs − Σoutputs when every input amount is known.
+        input_amounts = [
+            _coerce_sompi(inp.get("previous_outpoint_amount"))
+            for inp in (tx.get("inputs") or [])
+        ]
+        output_amounts = [
+            _coerce_sompi(out.get("amount")) for out in (tx.get("outputs") or [])
+        ]
+        fee_candidate = 0
+        if input_amounts and all(a > 0 for a in input_amounts):
+            fee_candidate = max(0, sum(input_amounts) - sum(output_amounts))
+        else:
+            # Wallet inputs − wallet outputs = external payment + fee (or fee alone on self-sends).
+            left_wallet = max(0, sent - received)
+            if external_send > 0:
+                fee_candidate = max(0, left_wallet - external_send)
+            else:
+                fee_candidate = left_wallet
+        if fee_candidate > 0:
+            fee_sompi = fee_candidate
+
     block_time = _block_time_seconds(
         int(tx.get("block_time") or tx.get("accepting_block_time") or 0)
     )
@@ -864,6 +955,7 @@ def _classify_kaspa_tx(
         counterparty=counterparty,
         confirmations=confirmations,
         accepting_block_blue_score=accepting_blue if accepting_blue > 0 else None,
+        fee_sompi=fee_sompi,
     )
 
 
@@ -1033,7 +1125,22 @@ def enrich_counterparties_from_raw_cache(
     enriched: list[dict] = []
     for row in rows:
         item = dict(row)
-        if str(item.get("counterparty") or "").strip():
+        direction = str(item.get("direction") or "").strip().lower()
+        is_send = direction in ("sent", "send", "out", "outgoing")
+        try:
+            existing_fee = int(item.get("fee_sompi") or item.get("fee_sats") or 0)
+        except (TypeError, ValueError):
+            existing_fee = 0
+        try:
+            existing_amount = float(item.get("amount_kas") or 0)
+        except (TypeError, ValueError):
+            existing_amount = 0.0
+        needs_counterparty = not str(item.get("counterparty") or "").strip()
+        # Always reconcile sends from raw cache when present — older outgoing metadata
+        # sometimes stored input totals as fee_sompi (e.g. 2.12 KAS) and blocked backfill.
+        needs_fee = is_send
+        needs_amount = is_send and existing_amount <= 0
+        if not needs_counterparty and not needs_fee and not needs_amount:
             enriched.append(item)
             continue
         txid = _norm_txid(str(item.get("transaction_id") or item.get("txid") or ""))
@@ -1044,8 +1151,22 @@ def enrich_counterparties_from_raw_cache(
                 classified = _classify_btc_tx(raw, wallet_addrs, change_addrs)
             else:
                 classified = _classify_kaspa_tx(raw, wallet_addrs, change_addrs)
-        if classified and str(classified.counterparty or "").strip():
-            item["counterparty"] = classified.counterparty
+        if classified:
+            if needs_counterparty and str(classified.counterparty or "").strip():
+                item["counterparty"] = classified.counterparty
+            if needs_amount and float(classified.amount_kas or 0) > 0:
+                item["amount_kas"] = float(classified.amount_kas)
+            if needs_fee and classified.fee_sompi is not None and int(classified.fee_sompi) >= 0:
+                fee = int(classified.fee_sompi)
+                # Prefer on-chain fee whenever raw classification succeeded.
+                if fee > 0 or existing_fee > 0:
+                    if fee > 0:
+                        item["fee_sompi"] = fee
+                        item["fee_sats"] = fee
+                    elif existing_fee > 0 and fee == 0:
+                        # Classified fee is zero — drop bogus stored fees.
+                        item.pop("fee_sompi", None)
+                        item.pop("fee_sats", None)
         enriched.append(item)
     return enriched
 
@@ -1151,6 +1272,12 @@ def _patch_kaspa_outgoing(wallet_id: str, rows: list[WalletTx]) -> list[WalletTx
         if not out or row.direction != "sent":
             patched.append(row)
             continue
+        fee_sompi = row.fee_sompi
+        # Only fill missing fees from broadcast metadata — never overwrite on-chain fees
+        # (legacy outgoing rows sometimes stored input totals as fee_sompi).
+        out_fee = int(getattr(out, "fee_sompi", 0) or 0)
+        if fee_sompi is None and out_fee > 0 and float(out.send_kas or 0) > 0:
+            fee_sompi = out_fee
         if out.send_kas > 0 and row.amount_kas + 1e-6 < out.send_kas:
             patched.append(
                 WalletTx(
@@ -1159,6 +1286,9 @@ def _patch_kaspa_outgoing(wallet_id: str, rows: list[WalletTx]) -> list[WalletTx
                     amount_kas=out.send_kas,
                     block_time=row.block_time,
                     counterparty=out.to_address or row.counterparty,
+                    confirmations=row.confirmations,
+                    accepting_block_blue_score=row.accepting_block_blue_score,
+                    fee_sompi=fee_sompi,
                 )
             )
         elif row.amount_kas < 0.001 and out.to_address and out.send_kas > 0:
@@ -1169,6 +1299,9 @@ def _patch_kaspa_outgoing(wallet_id: str, rows: list[WalletTx]) -> list[WalletTx
                     amount_kas=out.send_kas,
                     block_time=row.block_time,
                     counterparty=out.to_address or row.counterparty,
+                    confirmations=row.confirmations,
+                    accepting_block_blue_score=row.accepting_block_blue_score,
+                    fee_sompi=fee_sompi,
                 )
             )
         elif row.amount_kas < 0.001 and out.to_address:
@@ -1179,6 +1312,9 @@ def _patch_kaspa_outgoing(wallet_id: str, rows: list[WalletTx]) -> list[WalletTx
                     amount_kas=row.amount_kas,
                     block_time=row.block_time,
                     counterparty=out.to_address or row.counterparty,
+                    confirmations=row.confirmations,
+                    accepting_block_blue_score=row.accepting_block_blue_score,
+                    fee_sompi=fee_sompi,
                 )
             )
         else:

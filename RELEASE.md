@@ -2,59 +2,76 @@
 
 Cross-platform desktop app (Electron + bundled Python backend).
 
+## What you need (reproducibility)
+
+Clone **this** repository only. A full release uses:
+
+| In this repo | Role |
+|--------------|------|
+| `app/` | Python backend bundled into the app |
+| `tools/` | Kaspa QR / broadcast / PSKT helpers + `kaspa_wasm_node` (required in the package) |
+| `electron/` | Electron UI + `npm run release` |
+
+You do **not** need the SeedMask firmware repository to build installers.
+
+### Optional firmware tools sync
+
+If you develop with both trees side by side:
+
+```text
+Arduino2/
+  SeedMask_Coordinator/     ← this repo
+  SeedMask_Firmware/tools/  ← optional sibling
+```
+
+then `npm run release` will refresh `SeedMask_Coordinator/tools/` from `SeedMask_Firmware/tools` when that folder exists. If firmware tools are missing, the script keeps the existing `tools/` already in this repo and continues.
+
 ## Build installers
 
 On **macOS** (produces `.dmg` + `.zip`):
 
 ```bash
-cd electron
-npm ci
+cd SeedMask_Coordinator/electron
+npm install
 npm run release
 ```
 
 On **Windows** (produces NSIS `.exe` + `.zip`):
 
 ```powershell
-cd electron
-npm ci
+cd SeedMask_Coordinator\electron
+npm install
 npm run release
 ```
 
 On **Linux** (produces `.AppImage` + `.deb`):
 
 ```bash
-cd electron
-npm ci
+cd SeedMask_Coordinator/electron
+npm install
 npm run release
 ```
 
-Artifacts land in `electron/release/`.
+Artifacts land in `SeedMask_Coordinator/electron/release/`.
 
-Or from the repo root:
+First run can take several minutes (bundled Python/Node runtime + packaging).
 
-```bash
-bash release.sh
-```
-
-## Publishing downloads
+## Website downloads
 
 1. Build installers on each platform (or CI matrix).
-2. Upload artifacts to a GitHub Release on this repo and/or [SeedMask/seedmask.io](https://github.com/SeedMask/seedmask.io) Releases.
-3. Point [seedmask.io/app](https://seedmask.io/app) at the release asset URL.
+2. Copy artifacts: `bash SeedMask_Coordinator/electron/scripts/sync_website_downloads.sh`
+3. Deploy `SeedMask_Coordinator/website/` to your static host.
 
-Do **not** commit installer binaries into git.
-
-## Reproducibility
-
-- Source of truth for the app is this repository.
-- Tag releases (for example `v1.0.0`) to match shipped version strings in `electron/package.json` / `VERSION.txt`.
-- Record the commit SHA in release notes when publishing a DMG.
-- Apple code signing / notarization will change the final binary hash vs an unsigned local build.
+The download page reads `website/downloads/manifest.js` for version and file names.
 
 ## CI suggestion
 
-Use a matrix build:
+Use a matrix build on **this** repo only:
 
-- `macos-latest` → `npm run release` → upload macOS artifacts
-- `windows-latest` → `npm run release` → upload Windows artifacts
-- `ubuntu-latest` → `npm run release` → upload Linux artifacts
+- `macos-latest` → `npm run release` → upload `release/*mac*`
+- `windows-latest` → `npm run release` → upload `release/*win*`
+- `ubuntu-latest` → `npm run release` → upload `release/*linux*`
+
+Merge artifacts and run `sync_website_downloads.sh` before deploying the website.
+
+Keep `tools/` committed (or restored in CI) so builds do not depend on a firmware checkout.

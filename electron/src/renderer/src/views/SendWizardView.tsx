@@ -1762,14 +1762,14 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
         return
       }
       // Prefer full draft envelope so the next cosigner can Load transaction with partials.
-      if (exportRes.pskt_hex || exportRes.pskt || exportRes.format === 'seedpass_pskt_draft_v1') {
+      if (exportRes.pskt_hex || exportRes.pskt || exportRes.format === 'seedmask_pskt_draft_v1') {
         const sigLoaded = Math.max(
           signatureProgressCount,
           Number(exportRes.signatures_loaded ?? 0),
         )
         const sigNeed = Math.max(sigNeedFromWallet, Number(exportRes.signatures_required ?? 0), 1)
         const envelope: Record<string, unknown> = {
-          format: 'seedpass_pskt_draft_v1',
+          format: 'seedmask_pskt_draft_v1',
           unsigned,
           pskt: exportRes.pskt,
           pskt_hex: exportRes.pskt_hex,

@@ -171,9 +171,17 @@ interface AppContextValue {
   loadTransactions: (query?: string, opts?: { refresh?: boolean }) => Promise<void>
   /** Quiet ~1s Kaspa confirmation refresh while counts are still settling. */
   refreshKaspaConfirmations: () => Promise<void>
+  /** Persist Kaspa confirmation high-water mark from Tx details (no soft cap). */
+  noteKaspaTxConfirmations: (
+    walletId: string,
+    transactionId: string,
+    confirmations: number,
+    acceptingBlockBlueScore?: number,
+  ) => void
   loadNetworkSettings: () => Promise<void>
   persistNetworkSettings: (s: NetworkSettingsDTO) => Promise<void>
   testBitcoinConnection: (b: BitcoinNetworkSettingsDTO) => Promise<import('@renderer/api/types').BitcoinConnectionTestResponse>
+  testKaspaConnection: (k: import('@renderer/api/types').KaspaNetworkSettingsDTO) => Promise<import('@renderer/api/types').KaspaConnectionTestResponse>
   refreshFiatPrices: () => Promise<void>
   mergeAddressBalances: () => Promise<void>
   persistWalletScanLimit: (limit: number) => Promise<void>
@@ -183,8 +191,11 @@ interface AppContextValue {
   setRenamingWalletId: (id: string | null) => void
   draftWalletLabel: string
   setDraftWalletLabel: (s: string) => void
+  kaspaImportHistoryPromptWalletId: string | null
+  setKaspaImportHistoryPromptWalletId: (id: string | null) => void
   renameWallet: (id: string, label: string) => Promise<void>
   applyLocalWalletLabel: (id: string, label: string) => void
+  applyLocalWalletPatch: (id: string, patch: Partial<WalletDTO>) => void
   /** Lock an encrypted wallet for this session (right-click strip menu). */
   lockEncryptedWallet: (id: string) => Promise<void>
   /** Open change-password modal for an encrypted wallet (strip menu). */
@@ -192,7 +203,7 @@ interface AppContextValue {
   /** Open encrypt modal for an unencrypted wallet (strip menu). */
   requestEncryptWallet: (id: string) => void
   beginAddWallet: () => void
-  discoverWallet: (walletId: string, wait?: boolean) => Promise<void>
+  discoverWallet: (walletId: string, wait?: boolean, opts?: { historyOnce?: 'public' }) => Promise<void>
   syncStatusByWallet: Record<string, import('@renderer/api/types').WalletSyncStatus>
   activeSyncStatus: import('@renderer/api/types').WalletSyncStatus | null
 }
@@ -261,6 +272,9 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
   const [networkSettingsSaving, setNetworkSettingsSaving] = useState(false)
   const [renamingWalletId, setRenamingWalletId] = useState<string | null>(null)
   const [draftWalletLabel, setDraftWalletLabel] = useState('')
+  const [kaspaImportHistoryPromptWalletId, setKaspaImportHistoryPromptWalletId] = useState<string | null>(
+    null,
+  )
   const [fiatTick, setFiatTick] = useState(0)
   const [scanDetailMessage, setScanDetailMessage] = useState<string | null>(null)
   const [syncStatusByWallet, setSyncStatusByWallet] = useState<Record<string, WalletSyncStatus>>({})
@@ -278,6 +292,7 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
   const sessionMainnetSyncedRef = useRef<Set<string>>(new Set())
   const networkWasOfflineRef = useRef(!navigator.onLine)
   const apiRef = useRef<APIClient | null>(null)
+  const networkSettingsRef = useRef<NetworkSettingsDTO | null>(null)
   const selectedChainRef = useRef(selectedChain)
   const activeWalletIdRef = useRef(activeWalletId)
   const balanceKasValueRef = useRef(balanceKasValue)
@@ -322,6 +337,7 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
   const walletConfigured = activeWallet != null
   const walletLabel = activeWallet?.label ?? 'SeedMask'
   const networkSettings = networkSettingsEnvelope?.settings ?? null
+  networkSettingsRef.current = networkSettings
   const isScanning = useMemo(
     () =>
       wallets.some(
@@ -511,7 +527,7 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     walletId: string,
     mode: WalletSyncMode = 'hot',
     wait = false,
-    opts?: { userInitiated?: boolean },
+    opts?: { userInitiated?: boolean; historyOnce?: 'public' },
   ): Promise<void> {
     const client = apiRef.current
     if (!client) return
@@ -533,7 +549,9 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     }
     let failed = false
     try {
-      const result = await client.requestSync(walletId, mode, wait)
+      const result = await client.requestSync(walletId, mode, wait, {
+        historyOnce: opts?.historyOnce,
+      })
       if (wait && result && 'balance_sompi' in result) {
         await loadWalletStateFromBackend(walletId, isViewingWallet(walletId))
       } else if (!wait) {
@@ -722,14 +740,33 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     return st === 'cached' || st === 'incomplete'
   }
 
+  function clearLockedWalletUi(): void {
+    setBalanceKasValue(0)
+    setUtxos([])
+    setTransactions([])
+    setAddressBook(null)
+    setReceiveAddresses([])
+    const emptyKeys = new Set<string>()
+    selectedSpendUtxoKeysRef.current = emptyKeys
+    setSelectedSpendUtxoKeys(emptyKeys)
+    setShowReceiveSheet(false)
+    setShowSendWizard(false)
+  }
+
   function applyLocalWallet(w: WalletDTO): void {
     const chain = walletCoin(w)
+    const locked = Boolean(w.encrypted && !w.unlocked)
     setIsAddingWallet(false)
-    sanitizeSnapshotForWallet(w.id, chain)
     activeWalletIdRef.current = w.id
     setActiveWalletId(w.id)
     activeWalletByCoinRef.current = { ...activeWalletByCoinRef.current, [chain]: w.id }
     setActiveWalletByCoin((prev) => ({ ...prev, [chain]: w.id }))
+    if (locked) {
+      clearLockedWalletUi()
+      stopAllEventStreams()
+      return
+    }
+    sanitizeSnapshotForWallet(w.id, chain)
     restoreSnapshot(w.id, chain)
     void refreshFiatPrices()
     void loadWalletStateFromBackend(w.id, true)
@@ -782,14 +819,30 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
         return preload.wallets
       }
       const res = await client.listWallets()
-      const byCoin = res.active_wallet_by_coin ?? {}
-      walletsRef.current = res.wallets
-      activeWalletByCoinRef.current = byCoin
-      setWallets(res.wallets)
-      if (res.active_wallet_by_coin) {
-        setActiveWalletByCoin(byCoin)
+      const serverByCoin = res.active_wallet_by_coin ?? {}
+      // Keep the user's in-app selection when it is still valid. A concurrent
+      // listWallets (settings autosave, sync) can return a stale active_wallet_by_coin
+      // and would otherwise snap the strip back to the previous wallet.
+      const mergedByCoin: Record<string, string> = { ...serverByCoin }
+      for (const chain of ['kaspa', 'bitcoin'] as const) {
+        const localId = activeWalletByCoinRef.current[chain]
+        if (
+          localId &&
+          res.wallets.some((w) => w.id === localId && walletCoin(w) === chain)
+        ) {
+          mergedByCoin[chain] = localId
+        }
       }
-      applyChainContextForWallets(targetChain, res.wallets, byCoin)
+      walletsRef.current = res.wallets
+      activeWalletByCoinRef.current = mergedByCoin
+      setWallets(res.wallets)
+      setActiveWalletByCoin(mergedByCoin)
+      const preferredId = mergedByCoin[targetChain]
+      if (preferredId && preferredId === activeWalletIdRef.current) {
+        // Already showing this wallet — refresh the list only; do not re-apply.
+        return res.wallets
+      }
+      applyChainContextForWallets(targetChain, res.wallets, mergedByCoin)
       return res.wallets
     },
     [],
@@ -1046,20 +1099,18 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
       ? visibleSyncStatus(active.id, syncStatusByWalletRef.current[active.id] ?? active.sync_status ?? 'cached')
       : null
     if (syncSt === 'syncing') {
-      setStatusMessage(chain === 'kaspa' ? 'Syncing Kaspa mainnet…' : 'Syncing Bitcoin mainnet…')
+      setStatusMessage('Syncing · Mainnet…')
       return
     }
     if (syncSt === 'cached') {
-      setStatusMessage(chain === 'kaspa' ? 'Cached · Kaspa mainnet' : 'Cached · Bitcoin mainnet')
+      setStatusMessage('Cached · Mainnet')
       return
     }
     if (syncSt === 'incomplete') {
-      setStatusMessage(
-        chain === 'kaspa' ? 'Incomplete scan · Kaspa mainnet' : 'Incomplete scan · Bitcoin mainnet',
-      )
+      setStatusMessage('Incomplete scan · Mainnet')
       return
     }
-    setStatusMessage(chain === 'kaspa' ? 'Live · Kaspa mainnet' : 'Live · Bitcoin mainnet')
+    setStatusMessage('Live · Mainnet')
   }
 
   function publishBalanceToUi(walletId: string, chain: CoinChain, nextBalance: number): void {
@@ -1259,7 +1310,8 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
   function ensureActiveWalletLiveStream(): void {
     const client = apiRef.current
     const activeId = activeWalletIdRef.current
-    if (!client || !activeId) {
+    const activeWallet = activeId ? walletsRef.current.find((w) => w.id === activeId) : undefined
+    if (!client || !activeId || (activeWallet?.encrypted && !activeWallet.unlocked)) {
       stopAllEventStreams()
       return
     }
@@ -1592,7 +1644,7 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
       const wid = activeWalletIdRef.current
       if (wid) {
         const activeW = walletsList.find((w) => w.id === wid)
-        // Do not auto-prompt unlock on startup — only when the user selects a locked wallet.
+        // Locked wallets stay selected (locked panel). Do not auto-prompt unlock.
         if (!(activeW?.encrypted && !activeW.unlocked)) {
           void loadWalletStateFromBackend(wid, true).then(() => {
             void ensureAddresses(wid).then(() => mergeAddressBalancesForWallet(wid))
@@ -1625,14 +1677,12 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
         wallets.find((x) => x.id === id) ??
         walletsRef.current.find((x) => x.id === id)
       if (!w) return
-      if (w.encrypted && !w.unlocked) {
-        setUnlockError(null)
-        setUnlockTarget((prev) => {
-          prev?.resolve?.(false)
-          return { id, hint: w }
-        })
-        return
-      }
+      // Selecting a locked wallet lands on it (locked panel), same as locking the one you are on.
+      setUnlockError(null)
+      setUnlockTarget((prev) => {
+        prev?.resolve?.(false)
+        return null
+      })
       const chain = walletCoin(w)
       setIsAddingWallet(false)
       activeWalletByCoinRef.current = { ...activeWalletByCoinRef.current, [chain]: w.id }
@@ -1738,16 +1788,8 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
         )
         // Drop in-memory balances / txs / addresses so locked panes cannot flash them.
         if (activeWalletIdRef.current === id) {
-          setBalanceKasValue(0)
-          setUtxos([])
-          setTransactions([])
-          setAddressBook(null)
-          setReceiveAddresses([])
-          const emptyKeys = new Set<string>()
-          selectedSpendUtxoKeysRef.current = emptyKeys
-          setSelectedSpendUtxoKeys(emptyKeys)
-          setShowReceiveSheet(false)
-          setShowSendWizard(false)
+          clearLockedWalletUi()
+          stopAllEventStreams()
         }
         delete addressBooksRef.current[id]
         setStatusMessage(`Locked “${w.label || 'wallet'}”`)
@@ -1956,7 +1998,11 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     setFiatTick((t) => t + 1)
   }, [])
 
-  const discoverWallet = useCallback(async (walletId: string, wait = false): Promise<void> => {
+  const discoverWallet = useCallback(async (
+    walletId: string,
+    wait = false,
+    opts?: { historyOnce?: 'public' },
+  ): Promise<void> => {
     invalidateMainnetSync(walletId)
     setWalletSyncStatus(walletId, 'syncing', { force: true })
     if (isViewingWallet(walletId)) {
@@ -1965,14 +2011,14 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
       setScanDetailMessage('Discovering used addresses on mainnet…')
       setStatusMessage(chain === 'kaspa' ? 'Discovering Kaspa funds…' : 'Discovering Bitcoin funds…')
     }
-    await requestBackgroundSync(walletId, 'discover', wait)
+    await requestBackgroundSync(walletId, 'discover', wait, { historyOnce: opts?.historyOnce })
     await loadWalletStateFromBackend(walletId, isViewingWallet(walletId))
     if (isViewingWallet(walletId)) {
       setFiatTick((t) => t + 1)
       clearScanDetail()
       updateScanStatusMessage()
     }
-    void requestBackgroundSync(walletId, 'deep', false)
+    void requestBackgroundSync(walletId, 'deep', false, { historyOnce: opts?.historyOnce })
   }, [])
 
   const refreshActiveWallet = useCallback(async () => {
@@ -2014,7 +2060,6 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
 
   const refreshAfterSuccessfulSend = useCallback(async () => {
     if (!activeWallet) return
-    const chain = walletCoin(activeWallet)
     setStatusMessage('Updating balance…')
     await requestBackgroundSync(activeWallet.id, 'hot', true)
     await loadWalletStateFromBackend(activeWallet.id, true)
@@ -2023,7 +2068,7 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     // Force history refresh so the just-broadcast tx appears (cache alone can lag).
     await loadTransactionsFor(activeWallet.id, undefined, { refresh: true })
     setFiatTick((t) => t + 1)
-    setStatusMessage(chain === 'kaspa' ? 'Live · Kaspa mainnet' : 'Live · Bitcoin mainnet')
+    setStatusMessage('Live · Mainnet')
   }, [activeWallet])
 
   const notePendingSend = useCallback(
@@ -2084,6 +2129,12 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     setWallets((prev) => prev.map((w) => (w.id === id ? { ...w, label } : w)))
   }, [])
 
+  const applyLocalWalletPatch = useCallback((id: string, patch: Partial<WalletDTO>) => {
+    const apply = (w: WalletDTO) => (w.id === id ? { ...w, ...patch } : w)
+    walletsRef.current = walletsRef.current.map(apply)
+    setWallets((prev) => prev.map(apply))
+  }, [])
+
   const loadTransactions = useCallback(async (query?: string, opts?: { refresh?: boolean }) => {
     const chain = selectedChainRef.current
     const wallet = walletForChainRef(chain)
@@ -2123,10 +2174,10 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     const next = snap.transactions.map((tx) => {
       const accepting = tx.accepting_block_blue_score ?? 0
       const prev = tx.confirmations ?? 0
-      if (prev >= 200) return tx
       if (accepting <= 0) return tx
       if (tipNow < accepting) return tx
-      const conf = Math.min(200, Math.max(1, tipNow - accepting))
+      // Store full depth (list UI still shows "Confirmed" at ≥200).
+      const conf = Math.max(1, tipNow - accepting)
       if (conf <= prev) return tx
       changed = true
       return { ...tx, confirmations: conf }
@@ -2190,7 +2241,7 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
         const prevConf = tx.confirmations ?? 0
         let conf = prevConf
         if (accepting > 0 && tipNow >= accepting) {
-          conf = Math.max(prevConf, Math.min(200, Math.max(1, tipNow - accepting)))
+          conf = Math.max(prevConf, Math.max(1, tipNow - accepting))
         } else if (prevConf <= 0 && (Number(u.confirmations) > 0 || accepting > 0)) {
           conf = Math.max(1, Number(u.confirmations) || 1)
         }
@@ -2221,6 +2272,43 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
       /* keep last known counts */
     }
   }, [applyLiveKaspaConfirmations, noteKaspaNetworkTip, kaspaPaintTipNow])
+
+  const noteKaspaTxConfirmations = useCallback(
+    (
+      walletId: string,
+      transactionId: string,
+      confirmations: number,
+      acceptingBlockBlueScore?: number,
+    ) => {
+      const tid = normalizeTxId(transactionId)
+      if (!walletId || !tid) return
+      const conf = Math.max(0, Math.floor(confirmations))
+      if (conf <= 0) return
+      const snap = snapshotsRef.current[walletId] ?? emptySnapshot()
+      let changed = false
+      const next = snap.transactions.map((tx) => {
+        if (txId(tx) !== tid) return tx
+        const prevConf = tx.confirmations ?? 0
+        const prevAccept = tx.accepting_block_blue_score ?? 0
+        const accepting = Math.max(prevAccept, Math.floor(acceptingBlockBlueScore || 0))
+        if (conf <= prevConf && accepting <= prevAccept) return tx
+        changed = true
+        return {
+          ...tx,
+          confirmations: Math.max(prevConf, conf),
+          accepting_block_blue_score: accepting > 0 ? accepting : tx.accepting_block_blue_score,
+        }
+      })
+      if (!changed) return
+      snap.transactions = next
+      snapshotsRef.current[walletId] = snap
+      schedulePersistSnapshots()
+      if (shouldPublishWalletUi(walletId)) {
+        setTransactions(snapshotTransactionsForWallet(walletId, 'kaspa'))
+      }
+    },
+    [],
+  )
 
   const refreshKaspaTip = useCallback(async () => {
     const chain = selectedChainRef.current
@@ -2315,6 +2403,9 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
           return { settings: saved.settings, defaults: prev.defaults }
         })
         setStatusMessage('Network settings saved')
+        // Drop freerun tip so own-node / Automatic tip samples start clean.
+        kaspaNetworkTipRef.current = null
+        kaspaPaintTipRef.current = null
         invalidateMainnetSync()
         queueMicrotask(() => {
           stopAllEventStreams()
@@ -2331,6 +2422,14 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     async (b: BitcoinNetworkSettingsDTO) => {
       if (!api) throw new Error('Not ready')
       return api.testBitcoinConnection(b)
+    },
+    [api],
+  )
+
+  const testKaspaConnection = useCallback(
+    async (k: import('@renderer/api/types').KaspaNetworkSettingsDTO) => {
+      if (!api) throw new Error('Not ready')
+      return api.testKaspaConnection(k)
     },
     [api],
   )
@@ -2550,6 +2649,12 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     void refreshFiatPrices()
   }, [api, reloadStatus, loadNetworkSettings, refreshFiatPrices])
 
+  // Refresh sidebar status when the active chain's connection preference changes.
+  useEffect(() => {
+    if (!networkSettings || !walletsBootstrapped) return
+    updateScanStatusMessage()
+  }, [networkSettings, selectedChain, walletsBootstrapped])
+
   useEffect(() => {
     const onFocus = (): void => {
       void pollActiveWalletIfIdle()
@@ -2676,9 +2781,11 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     pollActiveWalletIfIdle,
     loadTransactions,
     refreshKaspaConfirmations,
+    noteKaspaTxConfirmations,
     loadNetworkSettings,
     persistNetworkSettings,
     testBitcoinConnection,
+    testKaspaConnection,
     refreshFiatPrices,
     mergeAddressBalances,
     persistWalletScanLimit,
@@ -2688,8 +2795,11 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     setRenamingWalletId,
     draftWalletLabel,
     setDraftWalletLabel,
+    kaspaImportHistoryPromptWalletId,
+    setKaspaImportHistoryPromptWalletId,
     renameWallet,
     applyLocalWalletLabel,
+    applyLocalWalletPatch,
     lockEncryptedWallet,
     requestChangeWalletPassword,
     requestEncryptWallet,

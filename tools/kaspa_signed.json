@@ -1,11 +1,1 @@
-{
-  "version": 2,
-  "network": "mainnet",
-  "account": 0,
-  "signatures": [
-    {
-      "input_index": 0,
-      "sig_hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-    }
-  ]
-}
+{"version":2,"network":"mainnet","account":0,"signatures":[{"input_index":0,"sig_hex":"8681eb3750a6194b144ce0d4697994eda124930352c5a51dc2f102b2b2e392b98619c14d521ec47c3c070a8c6d38b1c681dbc24e021740c7b7a22da76714f0c8"}]}

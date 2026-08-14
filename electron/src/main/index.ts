@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { app, BrowserWindow, ipcMain, shell, dialog, nativeImage, session, clipboard } =
   require('electron') as typeof import('electron')
-import { join } from 'path'
+import { join, relative, resolve, isAbsolute } from 'path'
 import { homedir } from 'os'
 import { existsSync, mkdirSync, renameSync, cpSync } from 'fs'
 import { readFile, writeFile } from 'fs/promises'
@@ -34,6 +34,7 @@ import {
 } from './onekey-bitcoin'
 import { APP_NAME, resolveAppIconPath, isTranslocatedMacApp } from './paths'
 import { buildExportQrPacks } from './ur-qr'
+import { registerAutoUpdater } from './auto-updater'
 
 type BrowserWindowInstance = InstanceType<typeof BrowserWindow>
 
@@ -80,10 +81,19 @@ function seedmaskImportExportDir(): string {
   }
 }
 
+function isInsideDir(filePath: string, dir: string): boolean {
+  const rel = relative(resolve(dir), resolve(filePath))
+  return rel.length > 0 && !rel.startsWith('..') && !isAbsolute(rel)
+}
+
+function isInsideWalletsFolder(filePath: string): boolean {
+  if (isInsideDir(filePath, seedmaskWalletsDir())) return true
+  return isInsideDir(filePath, join(homedir(), 'SeedMask Coordinator', 'wallets'))
+}
+
 /**
- * Default dialog location for SeedMask wallet files.
- * Opens inside ~/.seedmask-coordinator/wallets; dialogs also set showHiddenFiles
- * (Sparrow-style) so the hidden parent stays visible if the user navigates up.
+ * Default Save / Import location: ~/.seedmask-coordinator/wallets.
+ * Dialogs also set showHiddenFiles so the hidden parent stays visible if the user navigates up.
  */
 function resolveSeedmaskDialogPath(defaultPath?: string): string {
   if (defaultPath && (defaultPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(defaultPath))) {
@@ -268,10 +278,23 @@ function registerIpc(): void {
       const res = await dialog.showSaveDialog(win, {
         defaultPath: resolveSeedmaskDialogPath(opts.defaultPath),
         filters: opts.filters,
-        // Like Sparrow: keep ~/.seedmask-coordinator visible if the user navigates up.
         properties: ['showHiddenFiles', 'createDirectory'],
       })
-      return res.canceled ? null : res.filePath
+      if (res.canceled || !res.filePath) return null
+      const dest = res.filePath
+      if (isInsideWalletsFolder(dest) && existsSync(dest)) {
+        const choice = await dialog.showMessageBox(win, {
+          type: 'warning',
+          buttons: ['Cancel', 'Replace anyway'],
+          defaultId: 0,
+          cancelId: 0,
+          message: 'A file with this name already exists in Coordinator’s wallets folder.',
+          detail:
+            'If you replace it, removing that wallet in Coordinator will delete this file too.',
+        })
+        if (choice.response !== 1) return null
+      }
+      return dest
     },
   )
 
@@ -807,6 +830,7 @@ if (!gotLock) {
       callback(permission === 'media' || String(permission) === 'camera')
     })
     registerIpc()
+    registerAutoUpdater(() => mainWindow)
     createWindow()
   })
 

@@ -4,7 +4,7 @@
 import os
 import sys
 
-PORT = int(os.environ.get("SEEDPASS_COORDINATOR_PORT", "18765"))
+PORT = int(os.environ.get("SEEDMASK_COORDINATOR_PORT", "18765"))
 HOST = "127.0.0.1"
 
 if __name__ == "__main__":

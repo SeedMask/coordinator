@@ -19,6 +19,14 @@ import { WalletSettingsView } from './WalletSettingsView'
 import { SystemSettingsView } from './SystemSettingsView'
 import { AddWalletView } from './AddWalletView'
 import { SendWizardView } from './SendWizardView'
+import { updaterNeedsAttention, useUpdaterStatus } from '@renderer/hooks/useUpdaterStatus'
+import { chainConnectionDetail, chainConnectionLabel, chainHistoryStatusLabel } from '@renderer/utils/networkSettings'
+import { parseUpdateReleaseNotes, updateNoteTagLabel } from '@renderer/utils/updateReleaseNotes'
+import {
+  applyKaspaImportHistoryChoice,
+  KaspaImportHistoryPrompt,
+  type KaspaImportHistoryChoice,
+} from '@renderer/components/KaspaImportHistoryPrompt'
 
 const NAV: { id: SidebarSection; label: string }[] = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -53,6 +61,7 @@ export function MainShellView(): React.JSX.Element {
     scanDetailMessage,
     buildLabel,
     activeSyncStatus,
+    networkSettings,
     draftWalletLabel,
     setDraftWalletLabel,
     api,
@@ -63,6 +72,9 @@ export function MainShellView(): React.JSX.Element {
     requestWalletUnlock,
     requestChangeWalletPassword,
     requestEncryptWallet,
+    discoverWallet,
+    kaspaImportHistoryPromptWalletId,
+    setKaspaImportHistoryPromptWalletId,
   } = useApp()
 
   const [walletOrderIds, setWalletOrderIds] = useState<string[]>([])
@@ -72,6 +84,7 @@ export function MainShellView(): React.JSX.Element {
   const [dashboardHomeKey, setDashboardHomeKey] = useState(0)
   /** Remount System settings (back to General) when re-selected from the main sidebar. */
   const [systemSettingsHomeKey, setSystemSettingsHomeKey] = useState(0)
+  const [historyPromptBusy, setHistoryPromptBusy] = useState(false)
   const contentAreaRef = useRef<HTMLDivElement>(null)
   const prevChainRef = useRef(selectedChain)
 
@@ -100,6 +113,24 @@ export function MainShellView(): React.JSX.Element {
     if (sidebarSelection === 'systemSettings') setSidebarSelection('dashboard')
     setAddWalletSession(true)
     setIsAddingWallet(true)
+  }
+
+  async function resolveKaspaHistoryPrompt(choice: KaspaImportHistoryChoice): Promise<void> {
+    const walletId = kaspaImportHistoryPromptWalletId
+    if (!walletId || historyPromptBusy) return
+    setHistoryPromptBusy(true)
+    try {
+      await applyKaspaImportHistoryChoice({
+        choice,
+        walletId,
+        discoverWallet,
+      })
+    } catch (e) {
+      setStatusMessage(e instanceof Error ? e.message : 'History discovery failed')
+    } finally {
+      setKaspaImportHistoryPromptWalletId(null)
+      setHistoryPromptBusy(false)
+    }
   }
 
   async function deleteStripWallet(id: string): Promise<void> {
@@ -290,6 +321,7 @@ export function MainShellView(): React.JSX.Element {
           </>
         )}
         <div style={{ flex: 1 }} />
+        <SidebarUpdateBanner />
         <button
           type="button"
           className={`sidebar-nav-btn sidebar-system-settings-btn${sidebarSelection === 'systemSettings' ? ' active' : ''}`}
@@ -297,12 +329,16 @@ export function MainShellView(): React.JSX.Element {
         >
           <NavIcon section="systemSettings" size={22} />
           System settings
+          <SidebarUpdateDot />
         </button>
 
         <SidebarStatusFooter
           isScanning={isScanning}
           statusMessage={statusMessage}
           scanDetailMessage={scanDetailMessage}
+          connectionLabel={chainConnectionLabel(networkSettings, selectedChain)}
+          connectionDetail={chainConnectionDetail(networkSettings, selectedChain)}
+          historyLabel={chainHistoryStatusLabel(networkSettings, selectedChain)}
           buildLabel={buildLabel}
           syncStatus={activeSyncStatus}
         />
@@ -395,6 +431,13 @@ export function MainShellView(): React.JSX.Element {
           onCancel={() => setRenamingWalletId(null)}
         />
       )}
+      {kaspaImportHistoryPromptWalletId && (
+        <KaspaImportHistoryPrompt
+          onChoosePublic={() => void resolveKaspaHistoryPrompt('public')}
+          onChoosePrivate={() => void resolveKaspaHistoryPrompt('private')}
+        />
+      )}
+      <PostUpdateWhatsNewHost />
     </div>
   )
 }
@@ -457,16 +500,275 @@ function RenameWalletSheet({
   )
 }
 
+function PostUpdateWhatsNewHost(): React.JSX.Element | null {
+  const status = useUpdaterStatus()
+  if (status?.phase !== 'whats-new') return null
+  return <UpdateDetailsModal mode="whats-new" onClose={() => undefined} />
+}
+
+function SidebarUpdateBanner(): React.JSX.Element | null {
+  const status = useUpdaterStatus()
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null)
+  const [showDetails, setShowDetails] = useState(false)
+
+  if (!updaterNeedsAttention(status)) return null
+  const version = status?.availableVersion
+  if (version && dismissedVersion === version && status?.phase === 'available') return null
+
+  const ready = status?.phase === 'downloaded'
+  const downloading = status?.phase === 'downloading'
+  const installing = status?.phase === 'installing'
+  const label = version ? `v${version}` : 'Update'
+  const inProgress = downloading || installing
+
+  return (
+    <>
+      <div className={`sidebar-update-banner${ready || installing ? ' ready' : ''}`} role="status">
+        <span className="sidebar-update-banner-title">
+          {installing ? 'Installing…' : ready ? 'Update ready' : downloading ? 'Downloading…' : 'Update available'}
+        </span>
+        <span className="sidebar-update-banner-sub">
+          {inProgress && typeof status?.percent === 'number'
+            ? `${label} · ${Math.floor(status.percent)}%`
+            : label}
+        </span>
+        {!inProgress ? (
+          <div className="sidebar-update-banner-actions">
+            <button
+              type="button"
+              className="sidebar-update-btn primary"
+              onClick={() => setShowDetails(true)}
+            >
+              Update
+            </button>
+            <button
+              type="button"
+              className="sidebar-update-btn"
+              onClick={() => setDismissedVersion(version ?? 'dismissed')}
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : (
+          <div className="sidebar-update-progress" aria-hidden="true">
+            <span style={{ width: `${Math.max(4, Math.min(100, status?.percent ?? 8))}%` }} />
+          </div>
+        )}
+      </div>
+      {showDetails ? <UpdateDetailsModal mode="update" onClose={() => setShowDetails(false)} /> : null}
+    </>
+  )
+}
+
+function UpdateDetailsModal({
+  mode = 'update',
+  onClose,
+}: {
+  mode?: 'update' | 'whats-new'
+  onClose: () => void
+}): React.JSX.Element {
+  const status = useUpdaterStatus()
+  const [busy, setBusy] = useState(false)
+  const [localError, setLocalError] = useState<string | null>(null)
+  const isWhatsNew = mode === 'whats-new' || status?.phase === 'whats-new'
+
+  const version = status?.availableVersion ? `v${status.availableVersion}` : 'new version'
+  const notes = parseUpdateReleaseNotes(status?.releaseNotes || '')
+  const releaseUrl =
+    status?.releaseUrl ||
+    (status?.availableVersion
+      ? `https://github.com/SeedMask/coordinator/releases/tag/v${status.availableVersion}`
+      : 'https://github.com/SeedMask/coordinator/releases')
+  const inProgress =
+    !isWhatsNew && (status?.phase === 'downloading' || status?.phase === 'installing')
+  const percent = typeof status?.percent === 'number' ? Math.floor(status.percent) : 0
+
+  async function dismissWhatsNew(): Promise<void> {
+    setLocalError(null)
+    const api = window.seedmask
+    if (!api?.dismissWhatsNew) {
+      onClose()
+      return
+    }
+    setBusy(true)
+    try {
+      await api.dismissWhatsNew()
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : String(e))
+      setBusy(false)
+    }
+  }
+
+  async function onUpdateNow(): Promise<void> {
+    setLocalError(null)
+    const api = window.seedmask
+    if (!api) {
+      setLocalError('Updater bridge is not available. Restart the app with npm run dev.')
+      return
+    }
+    setBusy(true)
+    try {
+      if (api.applyUpdate) {
+        await api.applyUpdate()
+      } else if (api.downloadUpdate && api.installUpdate) {
+        await api.downloadUpdate()
+        await api.installUpdate()
+      } else {
+        setLocalError('Updater is outdated in this session. Quit and run npm run dev again.')
+        setBusy(false)
+      }
+      // Demo reloads / relaunches; keep busy until then.
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : String(e))
+      setBusy(false)
+    }
+  }
+
+  function onBackdropClick(): void {
+    if (busy || inProgress) return
+    if (isWhatsNew) {
+      void dismissWhatsNew()
+      return
+    }
+    onClose()
+  }
+
+  return (
+    <div
+      className="modal-backdrop update-details-backdrop"
+      role="presentation"
+      onClick={onBackdropClick}
+    >
+      <div
+        className="modal-card update-details-modal elevated-card"
+        role="dialog"
+        aria-labelledby="update-details-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="update-details-header">
+          <p className="update-details-eyebrow">
+            {isWhatsNew ? 'Just updated' : 'Software update'}
+          </p>
+          <h3 id="update-details-title">
+            {isWhatsNew
+              ? `What's new in SeedMask Coordinator ${version}`
+              : `SeedMask Coordinator ${version}`}
+          </h3>
+          <p className="update-details-lead">
+            {isWhatsNew
+              ? "Here's what changed in this release."
+              : 'Review what changed, then update. Coordinator will download the release, install it, and restart automatically.'}
+          </p>
+        </header>
+
+        <div className="update-details-section update-details-notes-section">
+          <strong>What&apos;s new</strong>
+          {notes.length > 0 ? (
+            <ul className="update-details-notes">
+              {notes.map((note, index) => (
+                <li key={`${note.kind}-${index}-${note.text.slice(0, 48)}`} data-kind={note.kind}>
+                  <span className="update-note-tag">{updateNoteTagLabel(note.kind)}</span>
+                  <span>{note.text.replace(/`/g, '')}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">See the GitHub release for full notes.</p>
+          )}
+        </div>
+
+        <div className="update-details-section">
+          <strong>GitHub release</strong>
+          <a
+            className="update-details-link"
+            href={releaseUrl}
+            onClick={(e) => {
+              e.preventDefault()
+              void window.seedmask?.openExternal(releaseUrl)
+            }}
+          >
+            {releaseUrl.replace(/^https?:\/\//, '')}
+          </a>
+          {status?.demo ? (
+            <p className="settings-update-sim-note">Demo update flow — not a published release.</p>
+          ) : null}
+        </div>
+
+        {inProgress ? (
+          <div className="update-details-progress-block">
+            <p className="update-details-progress-label">
+              {status?.phase === 'installing'
+                ? 'Installing and restarting…'
+                : `Downloading update… ${percent}%`}
+            </p>
+            <div className="settings-update-progress update-details-bar" aria-hidden="true">
+              <span style={{ width: `${Math.max(4, Math.min(100, percent || 8))}%` }} />
+            </div>
+          </div>
+        ) : null}
+
+        {localError || status?.error ? (
+          <p className="settings-update-error">{localError || status?.error}</p>
+        ) : null}
+
+        <div className="update-details-actions">
+          {isWhatsNew ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy}
+              onClick={() => void dismissWhatsNew()}
+            >
+              {busy ? 'Closing…' : 'Got it'}
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={busy || inProgress}
+                onClick={onClose}
+              >
+                Later
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={busy || inProgress}
+                onClick={() => void onUpdateNow()}
+              >
+                {busy || inProgress ? 'Updating…' : 'Update now'}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SidebarUpdateDot(): React.JSX.Element | null {
+  const status = useUpdaterStatus()
+  if (!status || (status.phase !== 'available' && status.phase !== 'downloaded')) return null
+  return <span className="sidebar-update-dot" aria-label="Update available" />
+}
+
 function SidebarStatusFooter({
   isScanning,
   statusMessage,
   scanDetailMessage,
+  connectionLabel,
+  connectionDetail,
+  historyLabel,
   buildLabel,
   syncStatus,
 }: {
   isScanning: boolean
   statusMessage: string
   scanDetailMessage: string | null
+  connectionLabel: string
+  connectionDetail: string
+  historyLabel: string
   buildLabel: string
   syncStatus: import('@renderer/api/types').WalletSyncStatus | null
 }): React.JSX.Element | null {
@@ -474,9 +776,13 @@ function SidebarStatusFooter({
 
   const live = syncStatus === 'live'
   const cached = syncStatus === 'cached' || syncStatus === 'incomplete'
+  const detail = isScanning ? scanDetailMessage : connectionLabel
+  const title = connectionDetail
+    ? `${connectionLabel} — ${connectionDetail}`
+    : connectionLabel
 
   return (
-    <div className={`sidebar-status-footer${isScanning ? ' scanning' : ''}`}>
+    <div className={`sidebar-status-footer${isScanning ? ' scanning' : ''}`} title={title}>
       <div className="sidebar-status-footer-body">
         <div className="sidebar-status-footer-main">
           {isScanning ? (
@@ -491,9 +797,10 @@ function SidebarStatusFooter({
             <span className={isScanning ? 'sidebar-status-primary scanning' : 'sidebar-status-primary'}>
               {statusMessage}
             </span>
-            {isScanning && scanDetailMessage && (
-              <span className="sidebar-status-detail">{scanDetailMessage}</span>
-            )}
+            {detail ? <span className="sidebar-status-detail">{detail}</span> : null}
+            {!isScanning && historyLabel ? (
+              <span className="sidebar-status-history">{historyLabel}</span>
+            ) : null}
           </div>
         </div>
         {buildLabel && <span className="sidebar-status-build">{buildLabel}</span>}

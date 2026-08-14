@@ -1,6 +1,6 @@
 {
   "name": "seedmask-coordinator",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "productName": "SeedMask Coordinator",
   "description": "SeedMask Coordinator - cross-platform desktop (watch-only)",
   "main": "./out/main/index.js",
@@ -10,7 +10,7 @@
   "scripts": {
     "sync:icon": "bash scripts/sync_app_icon.sh",
     "predev": "bash scripts/sync_app_icon.sh",
-    "dev": "electron-vite dev",
+    "dev": "env -u ELECTRON_RUN_AS_NODE electron-vite dev",
     "open:app": "bash scripts/install_to_applications.sh && open '/Applications/SeedMask Coordinator.app'",
     "run:app": "npm run build && electron-builder --mac --dir --config electron-builder.yml && npm run open:app",
     "install:app": "bash scripts/install_to_applications.sh",
@@ -25,6 +25,7 @@
     "package:mac": "npm run build && electron-builder --mac --config electron-builder.yml",
     "package:win": "npm run build && electron-builder --win --config electron-builder.yml",
     "package:linux": "npm run build && electron-builder --linux --config electron-builder.yml",
+    "updates:local": "node scripts/serve-local-updates.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json"
   },
   "dependencies": {
@@ -38,6 +39,7 @@
     "@onekeyfe/hd-transport-electron": "^1.1.31",
     "@stoprocent/noble": "^2.3.16",
     "buffer": "^6.0.3",
+    "electron-updater": "^6.8.9",
     "jsqr": "^1.4.0",
     "ledger-bitcoin": "^0.3.0",
     "qrcode": "^1.5.4",

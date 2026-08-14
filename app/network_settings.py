@@ -18,6 +18,9 @@ _TXID_PLACEHOLDER = "{txid}"
 _bitcoin_settings_override: contextvars.ContextVar["BitcoinNetworkSettings | None"] = contextvars.ContextVar(
     "bitcoin_settings_override", default=None
 )
+_kaspa_settings_override: contextvars.ContextVar["KaspaNetworkSettings | None"] = contextvars.ContextVar(
+    "kaspa_settings_override", default=None
+)
 
 
 def _strip_url(url: str) -> str:
@@ -317,7 +320,7 @@ class KaspaNetworkSettings:
             if not norm.rpc_url:
                 raise ValueError("Custom Kaspa node URL is required when not using the public resolver")
             if not _valid_http_url(norm.rpc_url, websockets=True):
-                raise ValueError("Kaspa node URL must be a valid wss:// address")
+                raise ValueError("Kaspa node URL must be a valid ws:// or wss:// address")
         if norm.history_mode == "custom" and norm.history_api_base:
             if not _valid_http_url(norm.history_api_base):
                 raise ValueError("Private Kaspa history API must be a valid http:// or https:// address")
@@ -426,6 +429,13 @@ def load_bitcoin_settings() -> BitcoinNetworkSettings:
     return load_network_settings().bitcoin
 
 
+def load_kaspa_settings() -> KaspaNetworkSettings:
+    override = _kaspa_settings_override.get()
+    if override is not None:
+        return override.normalized()
+    return load_network_settings().kaspa
+
+
 class bitcoin_settings_override:
     def __init__(self, settings: BitcoinNetworkSettings) -> None:
         self._settings = settings.normalized()
@@ -438,6 +448,20 @@ class bitcoin_settings_override:
     def __exit__(self, exc_type, exc, tb):
         if self._token is not None:
             _bitcoin_settings_override.reset(self._token)
+
+
+class kaspa_settings_override:
+    def __init__(self, settings: KaspaNetworkSettings) -> None:
+        self._settings = settings.normalized()
+        self._token = None
+
+    def __enter__(self):
+        self._token = _kaspa_settings_override.set(self._settings)
+        return self._settings
+
+    def __exit__(self, exc_type, exc, tb):
+        if self._token is not None:
+            _kaspa_settings_override.reset(self._token)
 
 
 def save_network_settings(settings: NetworkSettings) -> NetworkSettings:
@@ -457,12 +481,18 @@ def invalidate_network_clients() -> None:
     from . import bitcoin_service
     from . import bitcoin_backend
     from .kaspa_service import get_service
+    from .transaction_history import clear_kaspa_tip_cache, ensure_kaspa_tip_pump
 
     bitcoin_service.reset_http_client()
     bitcoin_backend.invalidate_backend_cache()
+    clear_kaspa_tip_cache()
     try:
         svc = get_service()
         svc.mark_settings_changed()
+    except Exception:
+        pass
+    try:
+        ensure_kaspa_tip_pump()
     except Exception:
         pass
 

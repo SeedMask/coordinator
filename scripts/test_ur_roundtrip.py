@@ -19,7 +19,7 @@ from ur_qr import fountain_qr_frames_base64, pick_fragment_len, ur_parts_for_tex
 
 
 def main() -> int:
-    wallet = Path.home() / ".seedpass-coordinator/wallet.json"
+    wallet = Path.home() / ".seedmask-coordinator/wallet.json"
     if not wallet.is_file():
         print("no wallet — using sample fixture")
         from kaspa_coordinator_qr import SAMPLE_TEST_V2

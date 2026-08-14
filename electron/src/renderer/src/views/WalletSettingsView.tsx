@@ -18,6 +18,7 @@ import {
 } from '@renderer/components/KeystoreUI'
 import {
   sanitizeFingerprint,
+  accountIndexFromDerivation,
   walletHasCompleteMultisigCosigners,
   walletIsIncompleteLegacyMultisig,
   walletIsMultisig,
@@ -57,6 +58,7 @@ export function WalletSettingsView(): React.JSX.Element {
     setStatusMessage,
     applyLocalWalletLabel,
     persistWalletScanLimit,
+    applyLocalWalletPatch,
   } = useApp()
   const [editLabel, setEditLabel] = useState('')
   const [editKeystoreLabel, setEditKeystoreLabel] = useState('')
@@ -64,6 +66,7 @@ export function WalletSettingsView(): React.JSX.Element {
   const [scanSaving, setScanSaving] = useState(false)
   const [selectedKeystoreIndex, setSelectedKeystoreIndex] = useState(0)
   const [editSinglesigFingerprint, setEditSinglesigFingerprint] = useState('')
+  const [editSinglesigDerivation, setEditSinglesigDerivation] = useState('')
   const [editCosigners, setEditCosigners] = useState<EditableCosigner[]>([])
   const [walletDescriptor, setWalletDescriptor] = useState('')
   const [descriptorError, setDescriptorError] = useState<string | null>(null)
@@ -136,6 +139,7 @@ export function WalletSettingsView(): React.JSX.Element {
       setEditKeystoreLabel('')
       setEditScanLimit(30)
       setEditSinglesigFingerprint('')
+      setEditSinglesigDerivation('')
       setEditCosigners([])
       suppressAutoSave.current = false
       return
@@ -145,6 +149,7 @@ export function WalletSettingsView(): React.JSX.Element {
     setEditScanLimit(activeWallet.scan_limit)
     setSelectedKeystoreIndex(0)
     setEditSinglesigFingerprint(walletResolvedFingerprint(activeWallet))
+    setEditSinglesigDerivation(walletResolvedDerivation(activeWallet))
     setEditCosigners(
       walletMultisigCosigners(activeWallet).map((c) => ({
         xpub: c.xpub,
@@ -186,26 +191,44 @@ export function WalletSettingsView(): React.JSX.Element {
     return requestWalletUnlock(activeWallet.id, activeWallet)
   }
 
+  /** Flush wallet-name edits before export so Save files do not keep the old label. */
+  async function flushPendingWalletLabel(): Promise<string> {
+    const trimmed = editLabel.trim()
+    if (!api || !activeWallet || !trimmed) return activeWallet?.label ?? ''
+    if (labelSaveTimer.current) {
+      clearTimeout(labelSaveTimer.current)
+      labelSaveTimer.current = null
+    }
+    if (trimmed === activeWallet.label) return trimmed
+    await api.updateWallet(activeWallet.id, { label: trimmed })
+    applyLocalWalletPatch(activeWallet.id, { label: trimmed })
+    await loadWallets()
+    return trimmed
+  }
+
   useEffect(() => {
     if (suppressAutoSave.current || !api || !activeWallet) return
     if (labelSaveTimer.current) clearTimeout(labelSaveTimer.current)
     labelSaveTimer.current = setTimeout(() => {
+      if (suppressAutoSave.current || !api || !activeWallet) return
       const trimmed = editLabel.trim()
-      if (!trimmed) return
+      if (!trimmed || trimmed === activeWallet.label) return
       void api.updateWallet(activeWallet.id, { label: trimmed }).then(() => loadWallets())
     }, 450)
     return () => {
       if (labelSaveTimer.current) clearTimeout(labelSaveTimer.current)
     }
-  }, [editLabel, api, activeWallet?.id, loadWallets])
+  }, [editLabel, api, activeWallet?.id, activeWallet?.label, loadWallets])
 
   useEffect(() => {
     if (suppressAutoSave.current || !api || !activeWallet) return
     if (walletIsMultisig(activeWallet)) return
     if (keystoreLabelSaveTimer.current) clearTimeout(keystoreLabelSaveTimer.current)
     keystoreLabelSaveTimer.current = setTimeout(() => {
+      if (suppressAutoSave.current || !api || !activeWallet) return
       const trimmed = editKeystoreLabel.trim()
-      if (!trimmed) return
+      const current = walletKeystoreLabel(activeWallet)
+      if (!trimmed || trimmed === current) return
       void api.updateWallet(activeWallet.id, { keystore_label: trimmed }).then(() => loadWallets())
     }, 450)
     return () => {
@@ -217,18 +240,24 @@ export function WalletSettingsView(): React.JSX.Element {
     if (suppressAutoSave.current || !api || !activeWallet) return
     if (scanSaveTimer.current) clearTimeout(scanSaveTimer.current)
     scanSaveTimer.current = setTimeout(() => {
+      if (suppressAutoSave.current || !activeWallet) return
+      if (editScanLimit === activeWallet.scan_limit) return
       void persistScanLimit(editScanLimit)
     }, 500)
     return () => {
       if (scanSaveTimer.current) clearTimeout(scanSaveTimer.current)
     }
-  }, [editScanLimit, api, activeWallet?.id])
+  }, [editScanLimit, api, activeWallet?.id, activeWallet?.scan_limit])
 
-  function scheduleKeystoreSave(nextFingerprint?: string, nextCosigners?: EditableCosigner[]): void {
+  function scheduleKeystoreSave(
+    nextFingerprint?: string,
+    nextCosigners?: EditableCosigner[],
+    nextDerivation?: string,
+  ): void {
     if (suppressAutoSave.current || !api || !activeWallet) return
     if (keystoreSaveTimer.current) clearTimeout(keystoreSaveTimer.current)
     keystoreSaveTimer.current = setTimeout(() => {
-      void persistKeystoreMetadata(nextFingerprint, nextCosigners)
+      void persistKeystoreMetadata(nextFingerprint, nextCosigners, nextDerivation)
     }, 450)
   }
 
@@ -248,6 +277,7 @@ export function WalletSettingsView(): React.JSX.Element {
   async function persistKeystoreMetadata(
     fingerprintOverride?: string,
     cosignersOverride?: EditableCosigner[],
+    derivationOverride?: string,
   ): Promise<void> {
     if (!api || !activeWallet) return
     try {
@@ -261,11 +291,21 @@ export function WalletSettingsView(): React.JSX.Element {
           }),
         )
         await api.updateWallet(activeWallet.id, { multisig_cosigners: cosigners })
+        await loadWallets()
       } else {
         const fp = sanitizeFingerprint(fingerprintOverride ?? editSinglesigFingerprint)
-        await api.updateWallet(activeWallet.id, { fingerprint: fp || undefined })
+        const derivation = (derivationOverride ?? editSinglesigDerivation).trim()
+        const w = await api.updateWallet(activeWallet.id, {
+          fingerprint: fp || undefined,
+          derivation: derivation || undefined,
+        })
+        const account = accountIndexFromDerivation(derivation)
+        applyLocalWalletPatch(activeWallet.id, {
+          ...w,
+          derivation: derivation || w.derivation,
+          ...(account != null ? { account } : {}),
+        })
       }
-      await loadWallets()
     } catch (e) {
       setStatusMessage(e instanceof Error ? e.message : 'Save failed')
     }
@@ -678,13 +718,29 @@ export function WalletSettingsView(): React.JSX.Element {
     let payload = ''
     let savePayload: string | undefined
     try {
-      payload = dest.build(activeWallet)
+      const liveLabel = await flushPendingWalletLabel()
+      const walletForExport = { ...activeWallet, label: liveLabel || activeWallet.label }
+      payload = dest.build(walletForExport)
       if (dest.id === 'seedmask') {
         if (!api) throw new Error('Backend not ready')
         const blob = await api.exportWallet(activeWallet.id)
-        savePayload = await blob.text()
+        const text = await blob.text()
+        // Filename uses the UI name; keep JSON label in sync even if autosave lagged.
+        try {
+          const parsed = JSON.parse(text) as Record<string, unknown>
+          const walletObj = parsed.wallet
+          if (walletObj && typeof walletObj === 'object' && !Array.isArray(walletObj) && liveLabel) {
+            ;(walletObj as Record<string, unknown>).label = liveLabel
+            parsed.wallet = walletObj
+            savePayload = `${JSON.stringify(parsed, null, 2)}\n`
+          } else {
+            savePayload = text
+          }
+        } catch {
+          savePayload = text
+        }
       } else if (dest.buildSave) {
-        savePayload = dest.buildSave(activeWallet)
+        savePayload = dest.buildSave(walletForExport)
       }
     } catch (e) {
       setStatusMessage(e instanceof Error ? e.message : 'Export failed')
@@ -1148,6 +1204,16 @@ export function WalletSettingsView(): React.JSX.Element {
               setEditSinglesigFingerprint(sanitized)
               scheduleKeystoreSave(sanitized)
             }}
+            derivation={editSinglesigDerivation}
+            onDerivationChange={(value) => {
+              setEditSinglesigDerivation(value)
+              const account = accountIndexFromDerivation(value)
+              applyLocalWalletPatch(activeWallet.id, {
+                derivation: value,
+                ...(account != null ? { account } : {}),
+              })
+              scheduleKeystoreSave(undefined, undefined, value)
+            }}
             onCopy={copyText}
           />
         )}
@@ -1439,6 +1505,8 @@ function SinglesigKeystoreSection({
   onKeystoreLabelChange,
   fingerprint,
   onFingerprintChange,
+  derivation,
+  onDerivationChange,
   onCopy,
 }: {
   wallet: WalletDTO
@@ -1446,6 +1514,8 @@ function SinglesigKeystoreSection({
   onKeystoreLabelChange: (value: string) => void
   fingerprint: string
   onFingerprintChange: (value: string) => void
+  derivation: string
+  onDerivationChange: (value: string) => void
   onCopy: (text: string, message: string) => void | Promise<void>
 }): React.JSX.Element {
   const coin = walletCoin(wallet)
@@ -1454,7 +1524,7 @@ function SinglesigKeystoreSection({
   const [showNativeFormat, setShowNativeFormat] = useState(false)
   const altKey =
     coin === 'bitcoin'
-      ? alternateBitcoinExtendedPubkey(wallet.kpub, wallet.script_type, walletResolvedDerivation(wallet))
+      ? alternateBitcoinExtendedPubkey(wallet.kpub, wallet.script_type, derivation || walletResolvedDerivation(wallet))
       : null
   const displayExtendedKey = showNativeFormat && altKey ? altKey.key : wallet.kpub
   const displayExtendedLabel =
@@ -1487,19 +1557,19 @@ function SinglesigKeystoreSection({
         />
         <KeystoreFieldRow
           title="Derivation"
-          value={walletResolvedDerivation(wallet)}
+          value={derivation}
           mono
           prominent
-          readOnly
           fieldSize="derivation"
-          onChange={() => {}}
+          placeholder={coin === 'bitcoin' ? "m/84'/0'/0'" : "m/44'/111111'/0'"}
+          onChange={onDerivationChange}
         />
         <label className="keystore-field prominent">
           <ExtendedKeyLabelRow
             coin={coin}
             keyValue={wallet.kpub}
             scriptType={wallet.script_type}
-            derivation={walletResolvedDerivation(wallet)}
+            derivation={derivation || walletResolvedDerivation(wallet)}
             showAlternate={showNativeFormat}
             onToggle={() => setShowNativeFormat((v) => !v)}
           />

@@ -27,6 +27,7 @@ class SyncJob:
     wallet_id: str = field(compare=False)
     mode: str = field(compare=False)  # hot | discover | deep
     on_progress: Callable[[str], None] | None = field(compare=False, default=None)
+    history_once: str | None = field(compare=False, default=None)
 
 
 class SyncWorker:
@@ -57,12 +58,14 @@ class SyncWorker:
         priority: SyncPriority | None = None,
         on_progress: Callable[[str], None] | None = None,
         wait: bool = False,
+        history_once: str | None = None,
     ) -> dict | None:
         job = SyncJob(
             priority=int(priority or SyncPriority.BACKGROUND_HOT),
             wallet_id=wallet_id,
             mode=mode,
             on_progress=on_progress,
+            history_once=history_once,
         )
         if wait:
             return await self._execute(job)
@@ -113,6 +116,11 @@ class SyncWorker:
             wallet_state.set_sync_status(job.wallet_id, wallet_state.SYNC_SYNCING, coin=coin)
 
         coordinator = self._coordinator
+        token = None
+        if (job.history_once or "").strip().lower() == "public":
+            from .transaction_history import _kaspa_history_once_public
+
+            token = _kaspa_history_once_public.set(True)
         try:
             if job.mode == "deep":
                 result = await coordinator.refresh(job.wallet_id, on_progress=job.on_progress)
@@ -148,6 +156,11 @@ class SyncWorker:
         except Exception:
             wallet_state.set_sync_status(job.wallet_id, wallet_state.SYNC_CACHED, coin=coin)
             raise
+        finally:
+            if token is not None:
+                from .transaction_history import _kaspa_history_once_public
+
+                _kaspa_history_once_public.reset(token)
 
     async def _publish_state(self, wallet_id: str, scan_result: dict | None) -> None:
         if not self._hub_publish:

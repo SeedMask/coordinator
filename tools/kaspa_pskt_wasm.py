@@ -25,7 +25,7 @@ def _bundled_wasm_dir() -> Path | None:
         if (p / "sdk_v2" / "kaspa_bg.wasm").is_file():
             return p
     # Relative to coordinator root when launched from .app
-    root = os.environ.get("SEEDPASS_COORDINATOR_ROOT", "").strip()
+    root = os.environ.get("SEEDMASK_COORDINATOR_ROOT", "").strip()
     if root:
         p = Path(root).parent / "runtime" / "kaspa_wasm"
         if (p / "sdk_v2" / "kaspa_bg.wasm").is_file():
@@ -48,7 +48,7 @@ def _node_bin() -> str | None:
             if "Cursor.app" not in str(candidate):
                 return str(candidate)
     # Bundled inside .app when coordinator runs from Resources
-    root = os.environ.get("SEEDPASS_COORDINATOR_ROOT", "").strip()
+    root = os.environ.get("SEEDMASK_COORDINATOR_ROOT", "").strip()
     if root:
         bundled = Path(root).parent / "runtime" / "node" / "bin" / "node"
         if bundled.is_file():

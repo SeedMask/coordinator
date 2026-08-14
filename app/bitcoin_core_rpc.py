@@ -48,6 +48,45 @@ def _auth_header() -> dict[str, str]:
     return {}
 
 
+def _cookie_file_path() -> Path | None:
+    s = _settings()
+    cookie_path = (s.core_cookie_path or "").strip()
+    if not cookie_path:
+        return None
+    path = Path(cookie_path).expanduser()
+    if path.is_dir():
+        path = path / ".cookie"
+    return path
+
+
+def _describe_core_rpc_error(exc: BaseException) -> str:
+    from . import bitcoin_http
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        if code in {401, 403}:
+            return (
+                "RPC rejected login — check Data folder (.cookie) or username/password. "
+                "If you use cookie auth, leave username/password blank."
+            )
+        return bitcoin_http.describe_http_error(exc)
+    if isinstance(exc, httpx.ConnectError):
+        return (
+            "Could not connect — is Bitcoin Core running? "
+            "Check host and port (mainnet RPC is usually 8332)."
+        )
+    if isinstance(exc, httpx.TimeoutException):
+        return "Timed out — Bitcoin Core did not answer. It may still be starting or syncing."
+    msg = str(exc).strip()
+    low = msg.lower()
+    if "connection refused" in low:
+        return (
+            "Connection refused — Bitcoin Core is not accepting RPC on that host/port. "
+            "Confirm Core is open and rpcbind/rpcallowip allow 127.0.0.1."
+        )
+    return msg or type(exc).__name__
+
+
 async def rpc_call(method: str, params: list | None = None) -> Any:
     payload = {
         "jsonrpc": "1.0",
@@ -68,20 +107,99 @@ async def rpc_call(method: str, params: list | None = None) -> Any:
 
 async def test_connection() -> dict[str, Any]:
     steps: list[str] = []
-    info = await rpc_call("getblockchaininfo")
+    s = _settings()
+    endpoint = _rpc_url()
+    steps.append(f"RPC endpoint: {endpoint}")
+
+    cookie = _cookie_file_path()
+    user = (s.core_user or "").strip()
+    if cookie is not None:
+        if not cookie.is_file():
+            return {
+                "ok": False,
+                "mode": "bitcoin_core",
+                "summary": f"Cookie file not found at {cookie}",
+                "steps": [
+                    *steps,
+                    f"Looked for .cookie at {cookie}",
+                    "Open Bitcoin Core once so it creates .cookie, or pick the correct Data folder.",
+                ],
+            }
+        steps.append(f"Auth: cookie file ({cookie})")
+    elif user:
+        steps.append("Auth: username/password")
+    else:
+        return {
+            "ok": False,
+            "mode": "bitcoin_core",
+            "summary": "No cookie path or username configured",
+            "steps": [
+                *steps,
+                "Set Data folder to your Bitcoin directory (cookie), or enter RPC username/password.",
+            ],
+        }
+
+    try:
+        info = await rpc_call("getblockchaininfo")
+    except Exception as exc:
+        return {
+            "ok": False,
+            "mode": "bitcoin_core",
+            "summary": _describe_core_rpc_error(exc),
+            "steps": [*steps, _describe_core_rpc_error(exc)],
+        }
+
+    if not isinstance(info, dict):
+        return {
+            "ok": False,
+            "mode": "bitcoin_core",
+            "summary": "Unexpected getblockchaininfo response",
+            "steps": steps,
+        }
+
     chain = str(info.get("chain") or "")
     blocks = int(info.get("blocks") or 0)
+    headers = int(info.get("headers") or blocks)
+    ibd = bool(info.get("initialblockdownload"))
+    try:
+        progress = float(info.get("verificationprogress") or 0.0)
+    except (TypeError, ValueError):
+        progress = 0.0
+
     steps.append(f"Connected to Bitcoin Core ({chain}, block {blocks:,})")
     if chain and chain != "main":
-        raise RuntimeError(f"Expected mainnet, got {chain!r}")
-    ver = await rpc_call("getnetworkinfo")
-    subver = str(ver.get("subversion") or "")
-    steps.append(f"Node version: {subver.strip() or 'unknown'}")
-    steps.append(f"RPC endpoint: {_rpc_url()}")
+        return {
+            "ok": False,
+            "mode": "bitcoin_core",
+            "summary": f"Expected mainnet, got {chain!r}",
+            "steps": steps,
+        }
+
+    try:
+        ver = await rpc_call("getnetworkinfo")
+        subver = str((ver or {}).get("subversion") or "") if isinstance(ver, dict) else ""
+        steps.append(f"Node version: {subver.strip() or 'unknown'}")
+    except Exception as exc:
+        steps.append(f"Could not read node version: {_describe_core_rpc_error(exc)}")
+
+    still_syncing = ibd or (progress > 0 and progress < 0.999) or (headers > 0 and blocks < headers)
+    if still_syncing:
+        pct = max(0.0, min(100.0, progress * 100.0))
+        steps.append(
+            f"Warning: node still syncing (~{pct:.1f}%, block {blocks:,} of {headers:,}) — "
+            "balances may look incomplete until sync finishes."
+        )
+        return {
+            "ok": True,
+            "mode": "bitcoin_core",
+            "summary": "Connected, but Bitcoin Core is still syncing",
+            "steps": steps,
+        }
+
     return {
         "ok": True,
         "mode": "bitcoin_core",
-        "summary": steps[0],
+        "summary": steps[1] if len(steps) > 1 else steps[0],
         "steps": steps,
     }
 

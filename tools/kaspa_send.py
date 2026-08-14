@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Simpler two-step Kaspa send with SeedPass (Mac coordinator + device sign).
+"""Simpler two-step Kaspa send with SeedMask (Mac coordinator + device sign).
 
 Step 1 — build QR (set who you pay with --to-address):
   python3 kaspa_send.py build \\
@@ -9,7 +9,7 @@ Step 1 — build QR (set who you pay with --to-address):
     --prev-tx-id <funding_tx_hex> --amount-sompi <utxo_sompi> --send-sompi <pay_sompi minus fee>
   # Default: one output only (leftover sompi = fee). Do not use --change-to-receive unless you know KIP-9 limits.
 
-  open ~/kaspa_tx.png   # scan on SeedPass → Review → Sign
+  open ~/kaspa_tx.png   # scan on SeedMask → Review → Sign
 
 Step 2 — paste or save signed QR JSON, then:
   python3 kaspa_send.py finish ~/kaspa_tx_unsigned.json ~/kaspa_signed.json

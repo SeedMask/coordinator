@@ -112,7 +112,7 @@ def open_qr_scanner(
             win.after(0, lambda: status.set("Could not open camera"))
             return
         detector = cv2.QRCodeDetector()
-        win.after(0, lambda: status.set("Point at QR on SeedPass screen…"))
+        win.after(0, lambda: status.set("Point at QR on SeedMask screen…"))
 
         while not stop.is_set():
             ok_frame, frame = cap.read()

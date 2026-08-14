@@ -15,12 +15,9 @@ import {
 } from '@renderer/components/ConnectHardwareWalletSheet'
 import { QRScannerSheet } from '@renderer/components/QRScannerSheet'
 import { WalletMark } from '@renderer/components/BrandMarks'
-import {
-  applyKaspaImportHistoryChoice,
-  KaspaImportHistoryPrompt,
-  type KaspaImportHistoryChoice,
-} from '@renderer/components/KaspaImportHistoryPrompt'
+import { ImportFileIcon } from '@renderer/components/icons'
 import { WalletPasswordModal } from '@renderer/components/WalletPasswordModal'
+import { InfoTipButton } from '@renderer/components/settings/SettingsChrome'
 import { useApp } from '@renderer/state/AppProvider'
 import {
   type BitcoinMultisigQuorum,
@@ -67,13 +64,12 @@ export function AddWalletView({
     wallets,
     loadWallets,
     activateWallet,
-    setIsAddingWallet,
     setStatusMessage,
     discoverWallet,
     draftWalletLabel,
     setDraftWalletLabel,
     networkSettings,
-    persistNetworkSettings,
+    setKaspaImportHistoryPromptWalletId,
   } = useApp()
 
   const [walletName, setWalletName] = useState(draftWalletLabel)
@@ -81,8 +77,6 @@ export function AddWalletView({
     walletLabel: string
     receiveNote: string
   } | null>(null)
-  const [historyPromptWalletId, setHistoryPromptWalletId] = useState<string | null>(null)
-  const [historyPromptBusy, setHistoryPromptBusy] = useState(false)
   const [kpubRaw, setKpubRaw] = useState('')
   const [scanLimit, setScanLimit] = useState(30)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -1021,39 +1015,16 @@ export function AddWalletView({
   async function finishImportedWallet(wallet: WalletDTO): Promise<void> {
     await loadWallets()
     await activateWallet(wallet.id, wallet)
-    setIsAddingWallet(false)
     hardwareImportLockRef.current = false
     lockImportMetaRef.current = false
     setStatusMessage('Wallet added')
     if (selectedChain === 'kaspa' && needsKaspaImportHistoryPrompt(networkSettings)) {
-      setHistoryPromptWalletId(wallet.id)
+      setKaspaImportHistoryPromptWalletId(wallet.id)
+      onDone()
       return
     }
     void discoverWallet(wallet.id)
     onDone()
-  }
-
-  async function resolveHistoryPrompt(choice: KaspaImportHistoryChoice): Promise<void> {
-    const walletId = historyPromptWalletId
-    if (!walletId || historyPromptBusy) return
-    setHistoryPromptBusy(true)
-    try {
-      await applyKaspaImportHistoryChoice({
-        choice,
-        walletId,
-        networkSettings,
-        persistNetworkSettings,
-        discoverWallet,
-      })
-      setHistoryPromptWalletId(null)
-      onDone()
-    } catch (e) {
-      setErrorMessage(formatError(e))
-      setHistoryPromptWalletId(null)
-      onDone()
-    } finally {
-      setHistoryPromptBusy(false)
-    }
   }
 
   async function addWallet(): Promise<void> {
@@ -1348,7 +1319,14 @@ export function AddWalletView({
       }
       setPendingImport(null)
       setStatusMessage(`Imported “${imported?.label || 'wallet'}”`)
-      setIsAddingWallet(false)
+      const importedId = imported?.id
+      if (
+        importedId &&
+        selectedChain === 'kaspa' &&
+        needsKaspaImportHistoryPrompt(networkSettings)
+      ) {
+        setKaspaImportHistoryPromptWalletId(importedId)
+      }
       onDone()
     } catch (e) {
       const msg = formatError(e)
@@ -1433,14 +1411,20 @@ export function AddWalletView({
             <p className="muted add-wallet-subtitle">{subtitle}</p>
           </div>
         </div>
-        <button
-          type="button"
-          className="btn btn-ghost add-wallet-import-btn"
-          disabled={busy || importBusy}
-          onClick={() => void beginImportWallet()}
-        >
-          Import wallet
-        </button>
+        <span className="add-wallet-import-action">
+          <button
+            type="button"
+            className="hw-connect-trigger chip"
+            disabled={busy || importBusy}
+            onClick={() => void beginImportWallet()}
+          >
+            <span className="hw-connect-trigger-icon" aria-hidden>
+              <ImportFileIcon size={16} />
+            </span>
+            Import wallet
+          </button>
+          <InfoTipButton text="Opens a SeedMask wallet file (Export → SeedMask → Save). Enter the password if the file is locked." />
+        </span>
         {selectedChain === 'bitcoin' && (
           <div className="descriptor-inline-field">
             <div className="descriptor-label-row">
@@ -1571,13 +1555,6 @@ export function AddWalletView({
           {busy ? 'Adding…' : 'Add wallet'}
         </button>
       </div>
-
-      {historyPromptWalletId && (
-        <KaspaImportHistoryPrompt
-          onChoosePublic={() => void resolveHistoryPrompt('public')}
-          onChoosePrivate={() => void resolveHistoryPrompt('private')}
-        />
-      )}
 
       {encryptPromptOpen && (
         <WalletPasswordModal
