@@ -8,7 +8,18 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { app, ipcMain } = require('electron') as typeof import('electron')
 import type { BrowserWindow } from 'electron'
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { spawn, execFileSync } from 'node:child_process'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { autoUpdater, type ProgressInfo, type UpdateInfo } from 'electron-updater'
 import {
@@ -129,6 +140,83 @@ let configured = false
 let checking = false
 let demoDownloadTimer: ReturnType<typeof setInterval> | null = null
 let holdingWhatsNew = false
+let downloadedUpdateFile: string | undefined
+
+function isSameVersion(a?: string, b?: string): boolean {
+  const left = (a || '').trim().replace(/^v/i, '')
+  const right = (b || '').trim().replace(/^v/i, '')
+  return Boolean(left) && left === right
+}
+
+function runningMacBundlePath(): string {
+  return join(process.execPath, '..', '..', '..')
+}
+
+function findMacAppBundle(dir: string, depth = 0): string | null {
+  if (depth > 4) return null
+  let nested: string | null = null
+  for (const name of readdirSync(dir)) {
+    if (name === '__MACOSX' || name.startsWith('.')) continue
+    const full = join(dir, name)
+    try {
+      if (!statSync(full).isDirectory()) continue
+    } catch {
+      continue
+    }
+    if (name.endsWith('.app')) return full
+    nested = findMacAppBundle(full, depth + 1) ?? nested
+  }
+  return nested
+}
+
+/** Ad-hoc / unsigned Mac builds: Squirrel.Mac relaunches the old .app. Replace the bundle ourselves. */
+function applyMacZipUpdate(zipPath: string): void {
+  const bundlePath = runningMacBundlePath()
+  if (!bundlePath.endsWith('.app')) {
+    throw new Error('Could not find the running SeedMask Coordinator.app to replace.')
+  }
+  if (bundlePath.startsWith('/Volumes/')) {
+    throw new Error('Move SeedMask Coordinator to Applications, then update from there.')
+  }
+  const extractDir = join(tmpdir(), `seedmask-update-${Date.now()}`)
+  rmSync(extractDir, { recursive: true, force: true })
+  mkdirSync(extractDir, { recursive: true })
+  execFileSync('ditto', ['-x', '-k', zipPath, extractDir], { stdio: 'ignore' })
+  const newApp = findMacAppBundle(extractDir)
+  if (!newApp) {
+    throw new Error('The update zip did not contain SeedMask Coordinator.app.')
+  }
+  const scriptPath = join(tmpdir(), `seedmask-apply-update-${process.pid}.sh`)
+  const script = `#!/bin/bash
+set -euo pipefail
+APP_PATH=${JSON.stringify(bundlePath)}
+NEW_APP=${JSON.stringify(newApp)}
+OLD_PID=${String(process.pid)}
+i=0
+while kill -0 "$OLD_PID" 2>/dev/null; do
+  sleep 0.25
+  i=$((i + 1))
+  if [ "$i" -gt 80 ]; then
+    break
+  fi
+done
+sleep 0.5
+OLD_COPY="\${APP_PATH}.preupdate.$$"
+rm -rf "$OLD_COPY"
+if [ -d "$APP_PATH" ]; then
+  mv "$APP_PATH" "$OLD_COPY"
+fi
+ditto "$NEW_APP" "$APP_PATH"
+rm -rf "$OLD_COPY"
+xattr -dr com.apple.quarantine "$APP_PATH" >/dev/null 2>&1 || true
+open "$APP_PATH"
+rm -rf ${JSON.stringify(extractDir)}
+rm -f ${JSON.stringify(scriptPath)}
+`
+  writeFileSync(scriptPath, script, { encoding: 'utf8', mode: 0o755 })
+  const child = spawn('/bin/bash', [scriptPath], { detached: true, stdio: 'ignore' })
+  child.unref()
+}
 
 function pushStatus(partial: Partial<UpdaterStatus>): void {
   const nextVersion = partial.availableVersion ?? status.availableVersion
@@ -220,7 +308,8 @@ function configureUpdater(getMainWindow: GetMainWindow): void {
   configured = true
 
   autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = true
+  // macOS: Squirrel.Mac cannot apply ad-hoc signed zips; we swap the .app ourselves.
+  autoUpdater.autoInstallOnAppQuit = process.platform !== 'darwin'
   autoUpdater.allowDowngrade = false
 
   const local = localFeedUrl()
@@ -252,6 +341,16 @@ function configureUpdater(getMainWindow: GetMainWindow): void {
   autoUpdater.on('update-available', (info: UpdateInfo) => {
     if (AUTO_UPDATE_DEMO) return
     checking = false
+    if (isSameVersion(info.version, app.getVersion())) {
+      pushStatus({
+        phase: 'not-available',
+        availableVersion: info.version,
+        error: undefined,
+        message: 'You are up to date.',
+      })
+      broadcast(getMainWindow)
+      return
+    }
     pushStatus({
       phase: 'available',
       availableVersion: info.version,
@@ -287,8 +386,9 @@ function configureUpdater(getMainWindow: GetMainWindow): void {
     broadcast(getMainWindow)
   })
 
-  autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
+  autoUpdater.on('update-downloaded', (info: UpdateInfo & { downloadedFile?: string }) => {
     if (AUTO_UPDATE_DEMO) return
+    downloadedUpdateFile = info.downloadedFile || downloadedUpdateFile
     pushStatus({
       phase: 'downloaded',
       availableVersion: info.version,
@@ -412,6 +512,29 @@ async function installUpdate(getMainWindow: GetMainWindow): Promise<{ ok: boolea
   }
 
   rememberWhatsNewForRestart()
+
+  if (process.platform === 'darwin' && !AUTO_UPDATE_DEMO) {
+    pushStatus({
+      phase: 'installing',
+      percent: 100,
+      message: 'Installing update…',
+      error: undefined,
+    })
+    broadcast(getMainWindow)
+    try {
+      if (!downloadedUpdateFile || !existsSync(downloadedUpdateFile)) {
+        throw new Error('Update zip not found. Try Update now again.')
+      }
+      applyMacZipUpdate(downloadedUpdateFile)
+      app.quit()
+      return { ok: true }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      pushStatus({ phase: 'error', error: message, message })
+      broadcast(getMainWindow)
+      return { ok: false, error: message }
+    }
+  }
 
   if (AUTO_UPDATE_DEMO) {
     pushStatus({

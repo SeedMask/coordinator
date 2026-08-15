@@ -242,7 +242,10 @@ function GeneralSettingsPanel(): React.JSX.Element {
       >
         <div className={`settings-update-card${phase === 'available' || phase === 'downloaded' ? ' has-update' : ''}`}>
           <div className="settings-update-copy">
-            <p className="muted">{updateHint}</p>
+            <p className="muted">
+              {updateStatus?.currentVersion ? `Installed: v${updateStatus.currentVersion}. ` : ''}
+              {updateHint}
+            </p>
             {updateStatus?.demo ? (
               <p className="settings-update-sim-note">Demo update flow — not a published release.</p>
             ) : null}

@@ -13,7 +13,8 @@
  * Live releases:
  * - What’s new + release URL come from the real GitHub Release body / tag.
  * - After a successful install, do not re-offer the same update.
- * - Packaged apps use autoUpdater.quitAndInstall.
+ * - Packaged apps: Windows/Linux use quitAndInstall. macOS replaces the .app
+ *   from the downloaded zip (Squirrel.Mac cannot apply ad-hoc signed builds).
  * - Feed is GitHub SeedMask/coordinator via electron-builder publish.
  */
 export const AUTO_UPDATE_DEMO = false
