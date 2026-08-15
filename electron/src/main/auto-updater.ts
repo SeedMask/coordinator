@@ -6,7 +6,7 @@
  * Does not publish anything — only checks/downloads when asked.
  */
 /* eslint-disable @typescript-eslint/no-require-imports */
-const { app, ipcMain } = require('electron') as typeof import('electron')
+const { app, ipcMain, net } = require('electron') as typeof import('electron')
 import type { BrowserWindow } from 'electron'
 import { spawn, execFileSync } from 'node:child_process'
 import {
@@ -102,6 +102,47 @@ function clearPendingWhatsNew(): void {
     if (existsSync(path)) unlinkSync(path)
   } catch {
     /* ignore */
+  }
+}
+
+function notesFromUpdateInfo(info: UpdateInfo): string | undefined {
+  const raw = info.releaseNotes
+  if (typeof raw === 'string' && raw.trim()) return raw
+  if (Array.isArray(raw)) {
+    const joined = raw
+      .map((item) => {
+        if (typeof item === 'string') return item
+        if (item && typeof item === 'object' && 'note' in item) {
+          const note = (item as { note?: unknown }).note
+          return typeof note === 'string' ? note : ''
+        }
+        return ''
+      })
+      .filter(Boolean)
+      .join('\n\n')
+    return joined || undefined
+  }
+  return undefined
+}
+
+async function fetchGithubReleaseMarkdown(version: string): Promise<string | undefined> {
+  const tag = version.replace(/^v/i, '').trim()
+  if (!tag) return undefined
+  try {
+    const res = await net.fetch(
+      `https://api.github.com/repos/SeedMask/coordinator/releases/tags/v${tag}`,
+      {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'SeedMask-Coordinator',
+        },
+      },
+    )
+    if (!res.ok) return undefined
+    const json = (await res.json()) as { body?: unknown }
+    return typeof json.body === 'string' && json.body.trim() ? json.body : undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -355,10 +396,16 @@ function configureUpdater(getMainWindow: GetMainWindow): void {
       phase: 'available',
       availableVersion: info.version,
       error: undefined,
-      releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : undefined,
+      releaseNotes: notesFromUpdateInfo(info),
       message: `Version ${info.version} is available.`,
     })
     broadcast(getMainWindow)
+    void fetchGithubReleaseMarkdown(info.version).then((markdown) => {
+      if (!markdown) return
+      if (!isSameVersion(status.availableVersion, info.version)) return
+      pushStatus({ releaseNotes: markdown })
+      broadcast(getMainWindow)
+    })
   })
 
   autoUpdater.on('update-not-available', (info: UpdateInfo) => {
@@ -599,6 +646,10 @@ function dismissWhatsNew(getMainWindow: GetMainWindow): UpdaterStatus {
   if (AUTO_UPDATE_DEMO) {
     // DEMO ONLY — re-offer so UX can be retested. Real releases: stay idle after dismiss.
     scheduleDemoAvailableAgain(getMainWindow, 2500)
+  } else if (app.isPackaged || localFeedUrl()) {
+    setTimeout(() => {
+      void checkForUpdates(getMainWindow)
+    }, 800)
   }
   return status
 }
@@ -626,22 +677,24 @@ export function registerAutoUpdater(getMainWindow: GetMainWindow): void {
   ipcMain.handle('updater:dismiss-whats-new', () => dismissWhatsNew(getMainWindow))
 
   // After Update → restart: show What’s new before any “update available” prompt.
-  if (applyPendingWhatsNew(getMainWindow)) {
-    return
-  }
+  applyPendingWhatsNew(getMainWindow)
+}
 
+/** Call once the renderer can receive `updater:event` — otherwise a check can finish unseen. */
+export function onUpdaterWindowReady(getMainWindow: GetMainWindow): void {
+  broadcast(getMainWindow)
+  if (holdingWhatsNew) return
   if (AUTO_UPDATE_DEMO) {
     setTimeout(() => {
       if (holdingWhatsNew) return
       pushDemoAvailable(getMainWindow)
-    }, 1_500)
+    }, 1_200)
     return
   }
-
   if (app.isPackaged || localFeedUrl()) {
     setTimeout(() => {
       if (holdingWhatsNew) return
       void checkForUpdates(getMainWindow)
-    }, 8_000)
+    }, 1_500)
   }
 }

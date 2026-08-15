@@ -1,6 +1,6 @@
 {
   "name": "seedmask-coordinator",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "productName": "SeedMask Coordinator",
   "description": "SeedMask Coordinator - cross-platform desktop (watch-only)",
   "main": "./out/main/index.js",

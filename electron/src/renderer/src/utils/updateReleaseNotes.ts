@@ -18,6 +18,45 @@ function kindFromHeading(heading: string): UpdateNoteKind | null {
   return null
 }
 
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+}
+
+function stripTags(text: string): string {
+  return decodeHtmlEntities(text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim())
+}
+
+/** GitHub’s updater feed sends HTML; in-app pills need markdown-style headings + bullets. */
+export function htmlReleaseNotesToMarkdown(raw: string): string {
+  if (!/<\s*(h[1-6]|ul|ol|li|p|div|br)\b/i.test(raw)) return raw
+  let s = raw.replace(/\r\n/g, '\n')
+  s = s.replace(/<\s*br\s*\/?\s*>/gi, '\n')
+  s = s.replace(/<\s*\/\s*p\s*>/gi, '\n')
+  s = s.replace(/<\s*p\b[^>]*>/gi, '')
+  s = s.replace(/<\s*h([1-6])\b[^>]*>([\s\S]*?)<\s*\/\s*h\1\s*>/gi, (_m, _n, inner) => {
+    return `\n### ${stripTags(String(inner))}\n`
+  })
+  s = s.replace(/<\s*li\b[^>]*>([\s\S]*?)<\s*\/\s*li\s*>/gi, (_m, inner) => {
+    return `- ${stripTags(String(inner))}\n`
+  })
+  s = s.replace(/<\s*\/?\s*(ul|ol)\b[^>]*>/gi, '\n')
+  s = s.replace(/<[^>]+>/g, '')
+  return decodeHtmlEntities(s)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line, i, lines) => line.length > 0 || (i > 0 && lines[i - 1]?.length))
+    .join('\n')
+    .trim()
+}
+
 function stripBullet(line: string): string {
   return line.replace(/^[-*+]\s+/, '').replace(/^\d+\.\s+/, '').trim()
 }
@@ -35,9 +74,10 @@ function kindFromPrefixedLine(line: string): UpdateNoteItem | null {
  * Supports:
  * - Legacy: `New: …` / `Fixed: …` / `Improved: …`
  * - GitHub markdown: `### Highlights` / `### Bugs fixed` / `### Improvements` + `-` bullets
+ * - GitHub HTML from the updater feed: `<h3>`, `<ul>`, `<li>`
  */
 export function parseUpdateReleaseNotes(raw: string): UpdateNoteItem[] {
-  const text = (raw || '').replace(/\r\n/g, '\n').trim()
+  const text = htmlReleaseNotesToMarkdown((raw || '').replace(/\r\n/g, '\n')).trim()
   if (!text) return []
 
   const out: UpdateNoteItem[] = []
@@ -84,7 +124,7 @@ export function parseUpdateReleaseNotes(raw: string): UpdateNoteItem[] {
     }
   }
 
-  return out.filter((n) => n.text.length > 0)
+  return out.filter((n) => n.text.length > 0 && !/^<\/?[a-z]/.test(n.text))
 }
 
 export function updateNoteTagLabel(kind: UpdateNoteKind): string {

@@ -34,7 +34,7 @@ import {
 } from './onekey-bitcoin'
 import { APP_NAME, resolveAppIconPath, isTranslocatedMacApp } from './paths'
 import { buildExportQrPacks } from './ur-qr'
-import { registerAutoUpdater } from './auto-updater'
+import { registerAutoUpdater, onUpdaterWindowReady } from './auto-updater'
 
 type BrowserWindowInstance = InstanceType<typeof BrowserWindow>
 
@@ -198,6 +198,7 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+    onUpdaterWindowReady(() => mainWindow)
   })
 
   mainWindow.webContents.on('did-fail-load', (_event: unknown, code: number, desc: string, url: string) => {
