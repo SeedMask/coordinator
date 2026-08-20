@@ -1,6 +1,6 @@
 # SeedMask Coordinator
 
-Watch-only desktop companion for **Kaspa and Bitcoin** mainnet — balances, addresses, and send flow with signing on hardware. Built for **SeedMask**; also works with **Ledger** and **OneKey** (public keys on the desktop, signing on the device). SeedMask is not affiliated with Ledger or OneKey.
+Watch-only desktop companion for **Kaspa and Bitcoin** mainnet — balances, addresses, and a send flow where signing stays on hardware. Works with **any air-gapped device** that can export an **xPub** (Bitcoin) or **kPub** (Kaspa). Built around **SeedMask**; USB/BLE signing helpers also cover Ledger and OneKey. SeedMask is not affiliated with Ledger or OneKey.
 
 **Platforms:** macOS (Apple Silicon) and Windows x64. Linux packaging exists in the build scripts but is not shipped yet.
 
@@ -20,6 +20,6 @@ Watch-only desktop companion for **Kaspa and Bitcoin** mainnet — balances, add
 | Windows CI | [`.github/workflows/release-windows.yml`](.github/workflows/release-windows.yml) |
 | PSKT round-trip test | `bash run_kaspa_pskt_roundtrip.sh` |
 
-Signing stays on SeedMask. This app never sees your seed.
+Signing stays on your air-gapped device. This app never sees your seed.
 
 SeedMask Coordinator is early software and has not completed a public security audit.

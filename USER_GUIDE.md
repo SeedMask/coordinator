@@ -1,6 +1,6 @@
 # SeedMask Coordinator — User Guide
 
-SeedMask Coordinator is a watch-only desktop app for **Kaspa and Bitcoin** mainnet. It helps you watch balances, build transactions, and broadcast — while private keys stay on hardware. Use it with **SeedMask**, and also with **Ledger** or **OneKey** (same rule: public state on the computer, signing on the device). SeedMask is not affiliated with Ledger or OneKey.
+SeedMask Coordinator is a watch-only desktop app for **Kaspa and Bitcoin** mainnet. It helps you watch balances, build transactions, and broadcast — while private keys stay on hardware. Import any air-gapped wallet that can export an **xPub** (Bitcoin) or **kPub** (Kaspa). SeedMask is the primary target; Ledger and OneKey also have USB/BLE import and signing helpers. SeedMask is not affiliated with Ledger or OneKey.
 
 **Supported installs today:** macOS Apple Silicon and Windows x64.
 
@@ -30,7 +30,7 @@ No Python, Node, or terminal setup is required. Everything runs inside the app.
 4. Scan the QR or paste the key into the coordinator.
 5. Wait for the mainnet scan to finish — your balance and coins appear on the dashboard.
 
-**Privacy:** Only watch-only public keys are stored on this computer (`~/.seedmask-coordinator/` on macOS/Linux; under your user profile on Windows). Your seed never leaves SeedMask.
+**Privacy:** Only watch-only public keys are stored on this computer (`~/.seedmask-coordinator/` on macOS/Linux; under your user profile on Windows). Your seed never leaves the air-gapped device.
 
 ## Send Kaspa
 
