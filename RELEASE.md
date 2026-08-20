@@ -58,22 +58,34 @@ First run can take several minutes (bundled Python/Node runtime + packaging).
 
 ## Website downloads
 
-1. Build installers on each platform (or CI matrix).
+Public downloads for end users are linked from **[seedmask.io/app](https://seedmask.io/app)** to GitHub Release assets (macOS `.dmg`, Windows `.exe`).
+
+Optional local static page in this repo:
+
+1. Build installers on each platform (or CI).
 2. Copy artifacts: `bash SeedMask_Coordinator/electron/scripts/sync_website_downloads.sh`
 3. Deploy `SeedMask_Coordinator/website/` to your static host.
 
-The download page reads `website/downloads/manifest.js` for version and file names.
+The in-repo download page reads `website/downloads/manifest.js` for version and file names.
 
-## CI suggestion
+## Auto-update feeds (GitHub Releases)
 
-Use a matrix build on **this** repo only:
+Attach both OS feeds on the same release tag when both platforms ship:
 
-- `macos-latest` → `npm run release` → upload `release/*mac*`
-- `windows-latest` → `npm run release` → upload `release/*win*` (see `.github/workflows/release-windows.yml`)
-- `ubuntu-latest` → `npm run release` → upload `release/*linux*`
+| File | OS |
+|------|-----|
+| `latest-mac.yml` | macOS |
+| `latest-win.yml` | Windows (primary from next builds) |
+| `latest.yml` | Windows (compat mirror for older clients) |
 
-The Windows workflow builds **x64 only** and never replaces macOS Release assets.
+## CI
 
-Merge artifacts and run `sync_website_downloads.sh` before deploying the website.
+- **Windows x64:** [`.github/workflows/release-windows.yml`](.github/workflows/release-windows.yml) — `workflow_dispatch` or push tags `v*`. Builds Windows only; does not replace macOS assets.
+- Suggested matrix for full coverage:
+  - `macos-latest` → `npm run release` → upload `release/*mac*` + `latest-mac.yml`
+  - `windows-latest` → workflow above → upload `release/*win*` + `latest-win.yml`
+  - `ubuntu-latest` → `npm run release` → upload `release/*linux*` (when shipping Linux)
+
+Merge artifacts onto one GitHub Release tag so each OS can update independently.
 
 Keep `tools/` committed (or restored in CI) so builds do not depend on a firmware checkout.

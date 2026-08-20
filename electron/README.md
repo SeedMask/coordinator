@@ -35,7 +35,7 @@ npm install   # first time only
 npm run release
 ```
 
-First run takes **several minutes** (pip downloads ~100MB deps, then builds a ~300MB `.dmg`). You should see `[preflight]` lines immediately — if you see nothing, you're in the wrong directory.
+First run takes **several minutes** (pip downloads + packaging). On macOS you get a `.dmg`/`.zip`; on Windows an `.exe`/`.zip`. You should see `[preflight]` lines immediately — if you see nothing, you're in the wrong directory.
 
 This will:
 
@@ -43,7 +43,7 @@ This will:
 2. Build the Electron UI
 3. Produce installers in `release/`
 4. Smoke-test the bundled backend
-5. Sync artifacts to `../website/downloads/` for the download page
+5. Optionally sync artifacts to `../website/downloads/` (local Mac releases; skipped on GitHub Actions)
 
 ### Scripts
 
@@ -54,17 +54,21 @@ This will:
 | `npm run release:dev-package` | Package without bundling runtime (uses system Python) |
 | `npm run package:mac` / `:win` / `:linux` | Electron-builder only (after `npm run build`) |
 
+Windows packaging uses `latest-win.yml` for auto-update (`package:win`). See [RELEASE.md](../RELEASE.md).
+
 ## Website download page
 
-Static site at [`../website/`](../website/index.html) with Mac / Windows / Linux download buttons.
+End-user downloads: [seedmask.io/app](https://seedmask.io/app) → GitHub Releases.
 
-After building installers, run:
+Optional static site at [`../website/`](../website/index.html) with Mac / Windows / Linux buttons.
+
+After building installers locally, you can run:
 
 ```bash
 bash scripts/sync_website_downloads.sh
 ```
 
-Host `coordinator/website/` on any static host (Netlify, S3, GitHub Pages, etc.).
+Host `coordinator/website/` on any static host if you use that path.
 
 ## Architecture
 

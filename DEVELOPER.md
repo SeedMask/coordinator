@@ -1,6 +1,6 @@
 # SeedMask Coordinator — Developer Guide
 
-Technical setup for building, testing, and hacking on the coordinator. End users should use the packaged **SeedMask Coordinator.app** — see [USER_GUIDE.md](USER_GUIDE.md).
+Technical setup for building, testing, and hacking on the coordinator. End users should use the packaged app (macOS `.dmg` or Windows `.exe`) — see [USER_GUIDE.md](USER_GUIDE.md).
 
 ## Repository layout
 
@@ -10,6 +10,7 @@ Technical setup for building, testing, and hacking on the coordinator. End users
 | `tools/` | Kaspa QR, broadcast, PSKT/PSKB + WASM helpers bundled into releases |
 | `electron/` | Electron desktop app and release packaging |
 | `scripts/` | Tests (PSKT round-trip, preflight) |
+| `.github/workflows/release-windows.yml` | Windows x64 installer CI (does not replace Mac assets) |
 
 Shipping builds only need **this** repository. See [RELEASE.md](RELEASE.md) for installer reproducibility (`tools/` is included here; firmware is optional).
 
@@ -27,9 +28,10 @@ Optional: Kaspa Python SDK for broadcast tests:
 .venv/bin/pip install kaspa
 ```
 
-Node (Homebrew) for rusty-kaspa WASM validation:
+Node for rusty-kaspa WASM validation:
 
 ```bash
+# macOS (Homebrew) example:
 brew install node
 # Prefer the copy shipped with this repo:
 bash tools/kaspa_wasm_node/setup_kaspa_wasm.sh
@@ -55,7 +57,7 @@ npm run dev
 
 ## Build shipping app
 
-Bundles Python, Node, and Kaspa WASM into the Electron package. From `electron/`:
+Bundles Python, Node, and Kaspa WASM into the Electron package. From `electron/` **on the target OS**:
 
 ```bash
 cd SeedMask_Coordinator/electron
@@ -69,9 +71,13 @@ Or from the repo root:
 bash SeedMask_Coordinator/release.sh
 ```
 
-Details and CI notes: [RELEASE.md](RELEASE.md).
+- **macOS** → `.dmg` + `.zip` (+ `latest-mac.yml` for auto-update)
+- **Windows** → NSIS `.exe` + `.zip` (+ `latest-win.yml`; CI mirrors `latest.yml` for older clients)
+- **Windows CI:** Actions workflow `release-windows.yml` (workflow_dispatch or `v*` tags)
 
-Sign and notarize separately with your Apple Developer ID for public macOS distribution (optional for private/unsigned builds).
+Details: [RELEASE.md](RELEASE.md).
+
+Sign and notarize separately with your Apple Developer ID for public macOS distribution (optional for private/unsigned builds). Windows Authenticode signing is likewise optional for preview builds.
 
 ## Tests
 
