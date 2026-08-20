@@ -79,9 +79,15 @@ cd "$ELECTRON_DIR"
 npm run build
 
 # Rebuild native USB/HID addons against this Electron ABI (required for Ledger in the .app).
+# On Windows CI, do not rebuild @abandonware/noble (VS2026 WinRT break). USB/HID only.
 if [[ -f "$ELECTRON_DIR/node_modules/.bin/electron-rebuild" ]] || npx --no-install electron-rebuild --version >/dev/null 2>&1; then
   echo "Rebuilding node-hid/usb for Electron…"
-  npx electron-rebuild -f -w node-hid,usb
+  UNAME_S="$(uname -s 2>/dev/null || true)"
+  if [[ "${OS:-}" == "Windows_NT" || "$UNAME_S" == MINGW* || "$UNAME_S" == MSYS* || "$UNAME_S" == CYGWIN* ]]; then
+    npx electron-rebuild -f --only usb,node-hid
+  else
+    npx electron-rebuild -f -w node-hid,usb
+  fi
 else
   echo "warn: @electron/rebuild not available — Ledger USB may fail in the packaged app"
 fi
