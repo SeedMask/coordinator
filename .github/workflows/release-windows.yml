@@ -21,7 +21,8 @@ jobs:
 
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      npm_config_ignore_scripts: "false"
+      # MSVC (VS2026) rejects deprecated experimental coroutines used by @abandonware/noble.
+      _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS: "1"
 
     steps:
       - name: Checkout
@@ -34,15 +35,49 @@ jobs:
           cache: npm
           cache-dependency-path: electron/package-lock.json
 
+      - name: Setup Python for node-gyp
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Install dependencies
         working-directory: electron
         shell: bash
+        env:
+          # Passed through to cl.exe / MSBuild for the noble WinRT binding.
+          CL: "/D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS"
+          npm_config_python: python
         run: |
           set -euo pipefail
           echo "cwd=$(pwd)"
           node -v
           npm -v
-          npm ci --no-fund --no-audit
+          python --version
+
+          # Skip install scripts first: @abandonware/noble (Ledger BLE) fails to compile
+          # against VS2026 without the silence flag, and even then is fragile.
+          # We install Electron manually, then rebuild only USB/HID natives.
+          npm ci --no-fund --no-audit --ignore-scripts
+
+          echo "Downloading Electron binary…"
+          node node_modules/electron/install.js
+
+          if [[ -f node_modules/esbuild/install.js ]]; then
+            node node_modules/esbuild/install.js
+          fi
+
+          echo "Rebuilding usb / node-hid for Electron (Ledger USB)…"
+          npx electron-rebuild -f -w usb,node-hid
+
+          # Optional BLE stacks — do not fail the Windows preview build if WinRT BLE
+          # bindings refuse to compile on this runner toolchain.
+          echo "Attempting BLE native rebuild (optional on Windows preview)…"
+          npx electron-rebuild -f -w @stoprocent/noble,@stoprocent/bluetooth-hci-socket \
+            || echo "warn: @stoprocent BLE rebuild skipped"
+          CL="/D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS" \
+            npx electron-rebuild -f -w @abandonware/noble \
+            || echo "warn: @abandonware/noble WinRT rebuild skipped (Ledger BLE over Bluetooth may be unavailable on this Windows build)"
+
           test -d node_modules/electron
           test -d node_modules/electron-builder
           test -d node_modules/electron-vite
@@ -51,6 +86,8 @@ jobs:
       - name: Build Windows x64 release
         working-directory: electron
         shell: bash
+        env:
+          CL: "/D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS"
         run: |
           set -euo pipefail
           npm run release 2>&1 | tee release-build.log
