@@ -1,6 +1,6 @@
 # SeedMask Coordinator — User Guide
 
-SeedMask Coordinator is the desktop companion for your **SeedMask** hardware wallet. It helps you watch balances, build transactions, and broadcast to Kaspa (and Bitcoin) mainnet — while your seed stays on the device.
+SeedMask Coordinator is a watch-only desktop app for **Kaspa and Bitcoin** mainnet. It helps you watch balances, build transactions, and broadcast — while private keys stay on hardware. Use it with **SeedMask**, and also with **Ledger** or **OneKey** (same rule: public state on the computer, signing on the device). SeedMask is not affiliated with Ledger or OneKey.
 
 **Supported installs today:** macOS Apple Silicon and Windows x64.
 

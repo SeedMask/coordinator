@@ -1,6 +1,6 @@
 # SeedMask Coordinator
 
-Electron companion for **SeedMask** hardware wallets — Kaspa and Bitcoin mainnet, watch-only balances, send flow with on-device signing.
+Watch-only desktop companion for **Kaspa and Bitcoin** mainnet — balances, addresses, and send flow with signing on hardware. Built for **SeedMask**; also works with **Ledger** and **OneKey** (public keys on the desktop, signing on the device). SeedMask is not affiliated with Ledger or OneKey.
 
 **Platforms:** macOS (Apple Silicon) and Windows x64. Linux packaging exists in the build scripts but is not shipped yet.
 
