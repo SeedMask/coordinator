@@ -64,7 +64,8 @@ win:
   icon: build/icon.png
   # USB/HID are rebuilt in prepare_release / CI. Do not let electron-builder
   # recompile @abandonware/noble (VS2026 WinRT / experimental coroutine break).
-  # package:win passes -c.npmRebuild=false for the same reason.
+  # package:win passes -c.npmRebuild=false and --publish never (Actions uploads
+  # artifacts / attaches to the GitHub Release in a later workflow step).
   # Explicit x64 only — do not ship Mac/ARM Windows targets from this config.
   target:
     - target: nsis
