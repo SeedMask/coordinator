@@ -303,6 +303,17 @@ function rememberWhatsNewForRestart(): void {
 function applyPendingWhatsNew(getMainWindow: GetMainWindow): boolean {
   const pending = readPendingWhatsNew()
   if (!pending) return false
+
+  // Only show What’s new if this process is actually the new build.
+  // Otherwise a failed Windows quitAndInstall can still open notes for 1.0.5 while running 1.0.4.
+  const running = (app.getVersion() || '').trim()
+  const expected = (pending.version || '').trim().replace(/^v/i, '')
+  const runningNorm = running.replace(/^v/i, '')
+  if (!expected || !runningNorm || !isSameVersion(runningNorm, expected)) {
+    clearPendingWhatsNew()
+    return false
+  }
+
   holdingWhatsNew = true
   const meta = releaseMeta(pending.version)
   pushStatus({
