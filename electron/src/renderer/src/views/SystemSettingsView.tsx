@@ -167,7 +167,16 @@ function GeneralSettingsPanel(): React.JSX.Element {
   const phase = updateStatus?.phase ?? 'idle'
   const updateHint =
     updateStatus?.message ||
-    (phase === 'idle' ? 'Check GitHub Releases for a newer Coordinator build.' : '')
+    (phase === 'idle'
+      ? 'Check for updates to see if a newer Coordinator build is available.'
+      : phase === 'not-available'
+        ? 'You are up to date.'
+        : '')
+  const rawError = phase === 'error' ? updateStatus?.error || '' : ''
+  const updateError =
+    rawError && !/latest-mac\.yml|latest-linux\.yml|cannot find latest/i.test(rawError)
+      ? rawError.split(/\r?\n/)[0]?.trim().slice(0, 160) || null
+      : null
 
   return (
     <SettingsPageLayout title="General">
@@ -255,7 +264,7 @@ function GeneralSettingsPanel(): React.JSX.Element {
                 <span style={{ width: `${Math.max(4, Math.min(100, updateStatus.percent))}%` }} />
               </div>
             ) : null}
-            {updateStatus?.error ? <p className="settings-update-error">{updateStatus.error}</p> : null}
+            {updateError ? <p className="settings-update-error">{updateError}</p> : null}
           </div>
           <div className="settings-update-actions">
             {phase === 'available' ? (

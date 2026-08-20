@@ -189,6 +189,45 @@ function isSameVersion(a?: string, b?: string): boolean {
   return Boolean(left) && left === right
 }
 
+/** Latest GitHub release is often Windows-only — missing latest-mac.yml is not a user-facing failure. */
+function isMissingPlatformUpdateFeed(message: string): boolean {
+  const m = (message || '').toLowerCase()
+  if (!m) return false
+  if (m.includes('latest-mac.yml') || m.includes('latest-linux.yml')) return true
+  if (m.includes('cannot find') && m.includes('.yml') && m.includes('latest')) return true
+  if (m.includes('404') && (m.includes('latest-mac') || m.includes('latest-linux') || m.includes('/latest.yml'))) {
+    return true
+  }
+  return false
+}
+
+function shortUpdateErrorMessage(raw: string): string {
+  const first = (raw || '').split(/\r?\n/)[0]?.trim() || 'Update check failed.'
+  if (first.length > 160) return 'Could not check for updates. Try again later.'
+  return first
+}
+
+function pushUpdateCheckFailure(getMainWindow: GetMainWindow, raw: string): void {
+  if (isMissingPlatformUpdateFeed(raw)) {
+    // No build for this OS on the newest GitHub release → treat as up to date.
+    pushStatus({
+      phase: 'not-available',
+      availableVersion: undefined,
+      error: undefined,
+      message: 'You are up to date.',
+    })
+    broadcast(getMainWindow)
+    return
+  }
+  const message = shortUpdateErrorMessage(raw)
+  pushStatus({
+    phase: 'error',
+    error: message,
+    message,
+  })
+  broadcast(getMainWindow)
+}
+
 function runningMacBundlePath(): string {
   return join(process.execPath, '..', '..', '..')
 }
@@ -460,12 +499,7 @@ function configureUpdater(getMainWindow: GetMainWindow): void {
   autoUpdater.on('error', (err: Error) => {
     if (AUTO_UPDATE_DEMO) return
     checking = false
-    pushStatus({
-      phase: 'error',
-      error: err?.message || String(err),
-      message: err?.message || 'Update failed.',
-    })
-    broadcast(getMainWindow)
+    pushUpdateCheckFailure(getMainWindow, err?.message || String(err))
   })
 }
 
@@ -498,8 +532,7 @@ async function checkForUpdates(getMainWindow: GetMainWindow): Promise<UpdaterSta
   } catch (e) {
     checking = false
     const message = e instanceof Error ? e.message : String(e)
-    pushStatus({ phase: 'error', error: message, message })
-    broadcast(getMainWindow)
+    pushUpdateCheckFailure(getMainWindow, message)
   }
   return status
 }
