@@ -120,6 +120,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          name: SeedMask Coordinator 1.0.5
+          body_path: .github/release-notes.md
+          draft: false
+          prerelease: false
+          make_latest: true
           files: |
             electron/release/*win*
             electron/release/*.exe
