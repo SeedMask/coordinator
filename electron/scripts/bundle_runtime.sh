@@ -83,19 +83,54 @@ resolve_python_standalone_triple() {
   esac
 }
 
+# Download a URL to a file. On Windows Git Bash, curl often fails with
+# "client returned ERROR on write" into long repo paths — use RUNNER_TEMP + PowerShell.
+download_url_to() {
+  local url="$1"
+  local dest="$2"
+  local tmp win_tmp
+  mkdir -p "$(dirname "$dest")"
+  if [[ -f "$dest" && -s "$dest" ]]; then
+    return 0
+  fi
+  tmp="${dest}.partial"
+  rm -f "$tmp"
+  if [[ "$PLATFORM" == "win32" ]]; then
+    if command -v powershell.exe >/dev/null 2>&1; then
+      win_tmp="$tmp"
+      if command -v cygpath >/dev/null 2>&1; then
+        win_tmp="$(cygpath -w "$tmp")"
+      fi
+      powershell.exe -NoProfile -Command \
+        "Invoke-WebRequest -Uri '$url' -OutFile '$win_tmp' -UseBasicParsing"
+    else
+      MSYS2_ARG_CONV_EXCL='*' curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o "$tmp" "$url"
+    fi
+  else
+    curl -fsSL --retry 3 --retry-delay 2 -o "$tmp" "$url"
+  fi
+  mv "$tmp" "$dest"
+}
+
 bundle_standalone_python() {
-  local triple tarball url cache extract_root
+  local triple tarball url cache extract_root cache_root
   triple="$(resolve_python_standalone_triple)"
   tarball="cpython-${PYTHON_STANDALONE_VERSION}+${PYTHON_STANDALONE_TAG}-${triple}-install_only_stripped.tar.gz"
   url="https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_STANDALONE_TAG}/${tarball}"
-  cache="$CACHE_DIR/$tarball"
+  if [[ "$PLATFORM" == "win32" && -n "${RUNNER_TEMP:-}" ]]; then
+    cache_root="$RUNNER_TEMP/seedmask-runtime-cache"
+  else
+    cache_root="$CACHE_DIR"
+  fi
+  mkdir -p "$cache_root"
+  cache="$cache_root/$tarball"
   extract_root="$RUNTIME/.python_extract"
   rm -rf "$extract_root"
   mkdir -p "$extract_root"
 
-  if [[ ! -f "$cache" ]]; then
+  if [[ ! -f "$cache" || ! -s "$cache" ]]; then
     echo "    Downloading $url"
-    curl -fsSL "$url" -o "$cache"
+    download_url_to "$url" "$cache"
   fi
 
   tar -xzf "$cache" -C "$extract_root"
@@ -142,11 +177,17 @@ esac
 
 # Official Node Windows builds are .zip; macOS/Linux are .tar.gz.
 if [[ "$PLATFORM" == "win32" ]]; then
-  NODE_CACHE="$CACHE_DIR/${NODE_PKG}.zip"
+  if [[ -n "${RUNNER_TEMP:-}" ]]; then
+    NODE_CACHE_ROOT="$RUNNER_TEMP/seedmask-runtime-cache"
+  else
+    NODE_CACHE_ROOT="$CACHE_DIR"
+  fi
+  mkdir -p "$NODE_CACHE_ROOT"
+  NODE_CACHE="$NODE_CACHE_ROOT/${NODE_PKG}.zip"
   NODE_URL="https://nodejs.org/dist/v${NODE_VER}/${NODE_PKG}.zip"
-  if [[ ! -f "$NODE_CACHE" ]]; then
+  if [[ ! -f "$NODE_CACHE" || ! -s "$NODE_CACHE" ]]; then
     echo "    Downloading $NODE_URL"
-    curl -fsSL "$NODE_URL" -o "$NODE_CACHE"
+    download_url_to "$NODE_URL" "$NODE_CACHE"
   fi
   EXTRACT_TMP="$RUNTIME/.node_extract"
   rm -rf "$EXTRACT_TMP"
@@ -169,9 +210,9 @@ if [[ "$PLATFORM" == "win32" ]]; then
 else
   NODE_CACHE="$CACHE_DIR/${NODE_PKG}.tar.gz"
   NODE_URL="https://nodejs.org/dist/v${NODE_VER}/${NODE_PKG}.tar.gz"
-  if [[ ! -f "$NODE_CACHE" ]]; then
+  if [[ ! -f "$NODE_CACHE" || ! -s "$NODE_CACHE" ]]; then
     echo "    Downloading $NODE_URL"
-    curl -fsSL "$NODE_URL" -o "$NODE_CACHE"
+    download_url_to "$NODE_URL" "$NODE_CACHE"
   fi
   tar -xzf "$NODE_CACHE" -C "$NODE_DIR" --strip-components=1
   chmod +x "$NODE_DIR/bin/node"

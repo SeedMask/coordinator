@@ -28,7 +28,7 @@ elif [[ -d "$REPO/SeedMask Firmware/tools" ]]; then
 else
   FIRMWARE_TOOLS=""
 fi
-APP_VERSION="$(node -p "require('$ELECTRON_DIR/package.json').version" 2>/dev/null || echo 1.0.0)"
+APP_VERSION="$(cd "$ELECTRON_DIR" && node -p "require('./package.json').version")"
 STAMP="$(date '+%Y-%m-%d %H:%M:%S')"
 
 RUNTIME_ONLY=0
