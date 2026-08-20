@@ -78,18 +78,23 @@ fi
 cd "$ELECTRON_DIR"
 npm run build
 
-# Rebuild native USB/HID addons against this Electron ABI (required for Ledger in the .app).
-# On Windows CI, do not rebuild @abandonware/noble (VS2026 WinRT break). USB/HID only.
+# Rebuild native addons against this Electron ABI (required for Ledger USB / BLE).
+# Windows: patch noble WinRT gyp for VS2026, then rebuild USB/HID + both BLE stacks.
+# Mac/Linux: USB/HID only here; electron-builder still rebuilds BLE on those platforms.
 if [[ -f "$ELECTRON_DIR/node_modules/.bin/electron-rebuild" ]] || npx --no-install electron-rebuild --version >/dev/null 2>&1; then
-  echo "Rebuilding node-hid/usb for Electron…"
   UNAME_S="$(uname -s 2>/dev/null || true)"
   if [[ "${OS:-}" == "Windows_NT" || "$UNAME_S" == MINGW* || "$UNAME_S" == MSYS* || "$UNAME_S" == CYGWIN* ]]; then
-    npx electron-rebuild -f --only usb,node-hid
+    echo "Patching Windows noble WinRT gyp (VS2026 coroutine silence)…"
+    node "$SCRIPT_DIR/patch_windows_noble_gyp.mjs"
+    echo "Rebuilding usb / node-hid / noble (Ledger + OneKey BLE) for Electron…"
+    # Keep npmRebuild=false on package:win — rebuild here explicitly so CI stays controlled.
+    npx electron-rebuild -f --only usb,node-hid,@abandonware/noble,@stoprocent/noble
   else
+    echo "Rebuilding node-hid/usb for Electron…"
     npx electron-rebuild -f -w node-hid,usb
   fi
 else
-  echo "warn: @electron/rebuild not available — Ledger USB may fail in the packaged app"
+  echo "warn: @electron/rebuild not available — Ledger USB/BLE may fail in the packaged app"
 fi
 
 case "$(uname -s)" in

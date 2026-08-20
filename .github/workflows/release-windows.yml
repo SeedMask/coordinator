@@ -52,11 +52,7 @@ jobs:
           npm -v
           python --version
 
-          # Do not set CL=/D... in Git Bash — MSYS converts it into
-          # "C:/Program Files/Git/D_..." and MSVC tries to compile that path.
-
-          # Skip install scripts: @abandonware/noble WinRT fails on VS2026.
-          # Electron binary + USB/HID natives are handled explicitly below.
+          # Skip install scripts during npm ci (natives rebuilt explicitly below).
           npm ci --no-fund --no-audit --ignore-scripts
 
           echo "Downloading Electron binary…"
@@ -66,9 +62,13 @@ jobs:
             node node_modules/esbuild/install.js
           fi
 
-          echo "Rebuilding usb / node-hid for Electron (Ledger USB)…"
-          # --only limits the set; do not rebuild abandonware BLE bindings here.
-          npx electron-rebuild -f --only usb,node-hid
+          echo "Patching Windows noble WinRT gyp (VS2026 coroutine silence)…"
+          node scripts/patch_windows_noble_gyp.mjs
+
+          echo "Rebuilding usb / node-hid / noble for Electron (USB + BLE)…"
+          # Controlled rebuild only — package:win keeps npmRebuild=false so
+          # electron-builder does not run a second full rebuild.
+          npx electron-rebuild -f --only usb,node-hid,@abandonware/noble,@stoprocent/noble
 
           test -d node_modules/electron
           test -d node_modules/electron-builder
