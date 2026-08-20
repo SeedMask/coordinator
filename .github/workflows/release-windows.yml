@@ -21,7 +21,6 @@ jobs:
 
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      # Allow native / electron install scripts on stock npm (package.json allowScripts is a local hardening list).
       npm_config_ignore_scripts: "false"
 
     steps:
@@ -36,34 +35,36 @@ jobs:
           cache-dependency-path: electron/package-lock.json
 
       - name: Install dependencies
-        shell: cmd
+        working-directory: electron
+        shell: bash
         run: |
-          cd /d "%GITHUB_WORKSPACE%\electron" || exit /b 1
-          echo cwd=%CD%
-          dir
-          where node
-          where npm
+          set -euo pipefail
+          echo "cwd=$(pwd)"
           node -v
           npm -v
-          if not exist package-lock.json (
-            echo missing package-lock.json
-            exit /b 1
-          )
           npm ci --no-fund --no-audit
-          if errorlevel 1 (
-            echo npm ci failed — falling back to npm install
-            npm install --no-fund --no-audit
-          )
+          test -d node_modules/electron
+          test -d node_modules/electron-builder
+          test -d node_modules/electron-vite
+          echo "node_modules ok"
 
       - name: Build Windows x64 release
         working-directory: electron
         shell: bash
         run: |
           set -euo pipefail
-          pwd
-          npm run release
+          npm run release 2>&1 | tee release-build.log
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-build-log
+          path: electron/release-build.log
+          if-no-files-found: ignore
 
       - name: List release outputs
+        if: always()
         working-directory: electron
         shell: bash
         run: |
@@ -71,6 +72,7 @@ jobs:
           ls -la release/*win* release/*.exe release/*.zip release/latest.yml 2>/dev/null || true
 
       - name: Upload Actions artifacts
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: seedmask-coordinator-windows-x64
@@ -82,8 +84,10 @@ jobs:
 
       - name: Attach to GitHub Release
         if: >-
-          startsWith(github.ref, 'refs/tags/') ||
-          (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+          success() && (
+            startsWith(github.ref, 'refs/tags/') ||
+            (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+          )
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
