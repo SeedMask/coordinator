@@ -104,3 +104,5 @@ publish:
   owner: SeedMask
   repo: coordinator
   releaseType: release
+  # Windows builds set publish.channel=latest-win via package:win → latest-win.yml.
+  # macOS keeps the default channel "latest" → latest-mac.yml. Do not set channel here.

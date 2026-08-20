@@ -129,6 +129,7 @@ jobs:
             electron/release/*win*
             electron/release/*.exe
             electron/release/latest.yml
+            electron/release/latest-win.yml
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

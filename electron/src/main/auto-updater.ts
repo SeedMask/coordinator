@@ -189,13 +189,21 @@ function isSameVersion(a?: string, b?: string): boolean {
   return Boolean(left) && left === right
 }
 
-/** Latest GitHub release is often Windows-only — missing latest-mac.yml is not a user-facing failure. */
+/** Latest GitHub release is often missing this OS’s feed — not a user-facing failure. */
 function isMissingPlatformUpdateFeed(message: string): boolean {
   const m = (message || '').toLowerCase()
   if (!m) return false
-  if (m.includes('latest-mac.yml') || m.includes('latest-linux.yml')) return true
+  if (m.includes('latest-mac.yml') || m.includes('latest-linux.yml') || m.includes('latest-win.yml')) {
+    return true
+  }
   if (m.includes('cannot find') && m.includes('.yml') && m.includes('latest')) return true
-  if (m.includes('404') && (m.includes('latest-mac') || m.includes('latest-linux') || m.includes('/latest.yml'))) {
+  if (
+    m.includes('404') &&
+    (m.includes('latest-mac') ||
+      m.includes('latest-linux') ||
+      m.includes('latest-win') ||
+      m.includes('/latest.yml'))
+  ) {
     return true
   }
   return false
@@ -403,6 +411,11 @@ function configureUpdater(getMainWindow: GetMainWindow): void {
   autoUpdater.autoInstallOnAppQuit = process.platform !== 'darwin'
   autoUpdater.allowDowngrade = false
 
+  // Windows feed file is latest-win.yml (not latest.yml). Mac stays on latest-mac.yml.
+  if (process.platform === 'win32') {
+    autoUpdater.channel = 'latest-win'
+  }
+
   const local = localFeedUrl()
   if (local) {
     autoUpdater.setFeedURL({ provider: 'generic', url: local })
@@ -411,7 +424,12 @@ function configureUpdater(getMainWindow: GetMainWindow): void {
   } else if (AUTO_UPDATE_DEMO) {
     pushStatus({ feed: 'auto-update-demo' })
   } else {
-    pushStatus({ feed: 'github:SeedMask/coordinator' })
+    pushStatus({
+      feed:
+        process.platform === 'win32'
+          ? 'github:SeedMask/coordinator (latest-win)'
+          : 'github:SeedMask/coordinator',
+    })
   }
 
   if (process.platform === 'win32') {
