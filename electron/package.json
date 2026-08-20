@@ -70,6 +70,11 @@
     "usb@2.18.0": true,
     "@stoprocent/noble@2.3.16": true,
     "@abandonware/noble@1.9.2-23": true,
-    "@stoprocent/bluetooth-hci-socket@2.2.6": true
+    "@stoprocent/bluetooth-hci-socket@2.2.6": true,
+    "electron": true,
+    "esbuild": true,
+    "@serialport/bindings-cpp": true,
+    "electron-winstaller": true,
+    "protobufjs": true
   }
 }

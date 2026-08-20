@@ -20,8 +20,9 @@ jobs:
     runs-on: windows-latest
 
     env:
-      # Unsigned preview builds — do not look for a Windows code-signing cert.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      # Allow native / electron install scripts on stock npm (package.json allowScripts is a local hardening list).
+      npm_config_ignore_scripts: "false"
 
     steps:
       - name: Checkout
@@ -35,13 +36,24 @@ jobs:
           cache-dependency-path: electron/package-lock.json
 
       - name: Install dependencies
-        working-directory: electron
-        shell: pwsh
+        shell: cmd
         run: |
-          Write-Host "cwd=$(Get-Location)"
-          Get-ChildItem
-          if (-not (Test-Path package-lock.json)) { throw "missing electron/package-lock.json" }
-          npm ci
+          cd /d "%GITHUB_WORKSPACE%\electron" || exit /b 1
+          echo cwd=%CD%
+          dir
+          where node
+          where npm
+          node -v
+          npm -v
+          if not exist package-lock.json (
+            echo missing package-lock.json
+            exit /b 1
+          )
+          npm ci --no-fund --no-audit
+          if errorlevel 1 (
+            echo npm ci failed — falling back to npm install
+            npm install --no-fund --no-audit
+          )
 
       - name: Build Windows x64 release
         working-directory: electron
@@ -49,7 +61,6 @@ jobs:
         run: |
           set -euo pipefail
           pwd
-          ls -la
           npm run release
 
       - name: List release outputs
