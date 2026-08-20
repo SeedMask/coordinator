@@ -178,8 +178,10 @@ bundle_standalone_python() {
   fi
 
   if [[ "$PLATFORM" == "win32" ]]; then
+    local reqs
+    reqs="$(to_windows_path "$COORD/requirements.txt")"
     "$PYDIR/python.exe" -m pip install --upgrade pip wheel
-    "$PYDIR/python.exe" -m pip install -r "$COORD/requirements.txt"
+    "$PYDIR/python.exe" -m pip install -r "$reqs"
     echo "    Python: $("$PYDIR/python.exe" --version)"
   else
     "$PYDIR/bin/python3" -m pip install --upgrade pip wheel
