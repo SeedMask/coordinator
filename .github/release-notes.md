@@ -1,9 +1,5 @@
-### ✨ Highlights
-- Windows in-app updates install silently and relaunch (no installer wizard)
-
 ### 🐛 Bugs fixed
-- In-app update opened “Choose installation options” and could leave you on the old version
-- What’s new could appear for a version that was not actually installed
+- Encrypted wallets sealed before `cryptography` was available could not unlock with the correct password (HMAC legacy vs AES-GCM mismatch)
 
 ### 🔧 Improvements
-- Clearer update install path on Windows (quit → silent install → restart)
+- Wallet decrypt accepts both AES-GCM and legacy HMAC seals; new seals mark the cipher and prefer AES-GCM

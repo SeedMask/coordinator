@@ -37,42 +37,82 @@ def _derive_key(password: str, salt: bytes, rounds: int = _PBKDF2_ROUNDS) -> byt
     )
 
 
-def _aes_gcm_encrypt(key: bytes, nonce: bytes, plaintext: bytes) -> bytes:
+_CIPHER_AES_GCM = "aes-256-gcm"
+_CIPHER_HMAC_LEGACY = "hmac-sha256-ctr"  # used when cryptography was missing at seal time
+
+
+def _hmac_legacy_encrypt(key: bytes, nonce: bytes, plaintext: bytes) -> bytes:
+    out = bytearray()
+    counter = 0
+    while len(out) < len(plaintext):
+        block = hmac.new(key, nonce + counter.to_bytes(4, "big"), hashlib.sha256).digest()
+        out.extend(block)
+        counter += 1
+    xored = bytes(a ^ b for a, b in zip(plaintext, out[: len(plaintext)]))
+    tag = hmac.new(key, nonce + xored, hashlib.sha256).digest()[:16]
+    return xored + tag
+
+
+def _hmac_legacy_decrypt(key: bytes, nonce: bytes, blob: bytes) -> bytes:
+    if len(blob) < 16:
+        raise ValueError("Invalid encrypted wallet data")
+    xored, tag = blob[:-16], blob[-16:]
+    expect = hmac.new(key, nonce + xored, hashlib.sha256).digest()[:16]
+    if not hmac.compare_digest(tag, expect):
+        raise ValueError("Wrong password or corrupted wallet data")
+    out = bytearray()
+    counter = 0
+    while len(out) < len(xored):
+        block = hmac.new(key, nonce + counter.to_bytes(4, "big"), hashlib.sha256).digest()
+        out.extend(block)
+        counter += 1
+    return bytes(a ^ b for a, b in zip(xored, out[: len(xored)]))
+
+
+def _aes_gcm_encrypt(key: bytes, nonce: bytes, plaintext: bytes) -> tuple[bytes, str]:
+    """Return (ciphertext, cipher_id). Prefer real AES-GCM; HMAC only if cryptography is absent."""
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-        return AESGCM(key).encrypt(nonce, plaintext, None)
+        return AESGCM(key).encrypt(nonce, plaintext, None), _CIPHER_AES_GCM
     except ImportError:
-        out = bytearray()
-        counter = 0
-        while len(out) < len(plaintext):
-            block = hmac.new(key, nonce + counter.to_bytes(4, "big"), hashlib.sha256).digest()
-            out.extend(block)
-            counter += 1
-        xored = bytes(a ^ b for a, b in zip(plaintext, out[: len(plaintext)]))
-        tag = hmac.new(key, nonce + xored, hashlib.sha256).digest()[:16]
-        return xored + tag
+        return _hmac_legacy_encrypt(key, nonce, plaintext), _CIPHER_HMAC_LEGACY
 
 
-def _aes_gcm_decrypt(key: bytes, nonce: bytes, blob: bytes) -> bytes:
-    try:
+def _aes_gcm_decrypt(key: bytes, nonce: bytes, blob: bytes, cipher: str | None = None) -> bytes:
+    """
+    Decrypt wallet ciphertext.
+
+    Early builds sealed with an HMAC stand-in when `cryptography` was missing, but still
+    wrote the same blob shape. If we only try AES-GCM (now that cryptography is installed),
+    the correct password looks like a wrong password. Prefer the marked cipher; otherwise
+    try AES-GCM then the HMAC legacy path.
+    """
+    cipher_id = (cipher or "").strip().lower()
+
+    def try_aes() -> bytes:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
         return AESGCM(key).decrypt(nonce, blob, None)
+
+    if cipher_id == _CIPHER_HMAC_LEGACY:
+        return _hmac_legacy_decrypt(key, nonce, blob)
+    if cipher_id == _CIPHER_AES_GCM:
+        try:
+            return try_aes()
+        except ImportError as e:
+            raise ValueError("cryptography package required to decrypt this wallet") from e
+
+    # Legacy unmarked blobs: try AES-GCM first, then HMAC fallback.
+    try:
+        return try_aes()
     except ImportError:
-        if len(blob) < 16:
-            raise ValueError("Invalid encrypted wallet data") from None
-        xored, tag = blob[:-16], blob[-16:]
-        expect = hmac.new(key, nonce + xored, hashlib.sha256).digest()[:16]
-        if not hmac.compare_digest(tag, expect):
-            raise ValueError("Wrong password or corrupted wallet data") from None
-        out = bytearray()
-        counter = 0
-        while len(out) < len(xored):
-            block = hmac.new(key, nonce + counter.to_bytes(4, "big"), hashlib.sha256).digest()
-            out.extend(block)
-            counter += 1
-        return bytes(a ^ b for a, b in zip(xored, out[: len(xored)]))
+        return _hmac_legacy_decrypt(key, nonce, blob)
+    except Exception:
+        try:
+            return _hmac_legacy_decrypt(key, nonce, blob)
+        except Exception as e:
+            raise ValueError("Wrong password or corrupted wallet data") from e
 
 
 def encrypt_secrets(secrets_obj: dict[str, Any], password: str) -> dict[str, Any]:
@@ -84,9 +124,10 @@ def encrypt_secrets(secrets_obj: dict[str, Any], password: str) -> dict[str, Any
     nonce = secrets.token_bytes(_NONCE_LEN)
     key = _derive_key(pw, salt)
     plaintext = json.dumps(secrets_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    ciphertext = _aes_gcm_encrypt(key, nonce, plaintext)
+    ciphertext, cipher_id = _aes_gcm_encrypt(key, nonce, plaintext)
     return {
         "kdf": "pbkdf2-sha256",
+        "cipher": cipher_id,
         "rounds": _PBKDF2_ROUNDS,
         "salt": base64.b64encode(salt).decode("ascii"),
         "nonce": base64.b64encode(nonce).decode("ascii"),
@@ -103,14 +144,17 @@ def decrypt_secrets(enc: dict[str, Any], password: str) -> dict[str, Any]:
         nonce = base64.b64decode(str(enc.get("nonce") or ""))
         ciphertext = base64.b64decode(str(enc.get("ciphertext") or ""))
         rounds = int(enc.get("rounds") or _PBKDF2_ROUNDS)
+        cipher = str(enc.get("cipher") or "") or None
     except Exception as e:
         raise ValueError("Invalid encrypted wallet data") from e
     if len(salt) < 8 or len(nonce) < 8 or not ciphertext:
         raise ValueError("Invalid encrypted wallet data")
     key = _derive_key(pw, salt, rounds)
     try:
-        raw = _aes_gcm_decrypt(key, nonce, ciphertext)
+        raw = _aes_gcm_decrypt(key, nonce, ciphertext, cipher)
         data = json.loads(raw.decode("utf-8"))
+    except ValueError:
+        raise
     except Exception as e:
         raise ValueError("Wrong password or corrupted wallet data") from e
     if not isinstance(data, dict):
