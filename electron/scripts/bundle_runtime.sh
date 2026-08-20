@@ -83,6 +83,33 @@ resolve_python_standalone_triple() {
   esac
 }
 
+# Git Bash tools need /d/... paths; PowerShell needs D:\... . RUNNER_TEMP is often Windows-form.
+to_unix_path() {
+  local p="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$p"
+  else
+    echo "$p"
+  fi
+}
+
+to_windows_path() {
+  local p="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$p"
+  else
+    echo "$p"
+  fi
+}
+
+win_cache_root() {
+  if [[ -n "${RUNNER_TEMP:-}" ]]; then
+    echo "$(to_unix_path "$RUNNER_TEMP")/seedmask-runtime-cache"
+  else
+    echo "$CACHE_DIR"
+  fi
+}
+
 # Download a URL to a file. On Windows Git Bash, curl often fails with
 # "client returned ERROR on write" into long repo paths — use RUNNER_TEMP + PowerShell.
 download_url_to() {
@@ -97,10 +124,7 @@ download_url_to() {
   rm -f "$tmp"
   if [[ "$PLATFORM" == "win32" ]]; then
     if command -v powershell.exe >/dev/null 2>&1; then
-      win_tmp="$tmp"
-      if command -v cygpath >/dev/null 2>&1; then
-        win_tmp="$(cygpath -w "$tmp")"
-      fi
+      win_tmp="$(to_windows_path "$tmp")"
       powershell.exe -NoProfile -Command \
         "Invoke-WebRequest -Uri '$url' -OutFile '$win_tmp' -UseBasicParsing"
     else
@@ -117,8 +141,8 @@ bundle_standalone_python() {
   triple="$(resolve_python_standalone_triple)"
   tarball="cpython-${PYTHON_STANDALONE_VERSION}+${PYTHON_STANDALONE_TAG}-${triple}-install_only_stripped.tar.gz"
   url="https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_STANDALONE_TAG}/${tarball}"
-  if [[ "$PLATFORM" == "win32" && -n "${RUNNER_TEMP:-}" ]]; then
-    cache_root="$RUNNER_TEMP/seedmask-runtime-cache"
+  if [[ "$PLATFORM" == "win32" ]]; then
+    cache_root="$(win_cache_root)"
   else
     cache_root="$CACHE_DIR"
   fi
@@ -133,7 +157,12 @@ bundle_standalone_python() {
     download_url_to "$url" "$cache"
   fi
 
-  tar -xzf "$cache" -C "$extract_root"
+  # --force-local: GNU tar treats "D:..." as a remote host without this.
+  if [[ "$PLATFORM" == "win32" ]]; then
+    tar --force-local -xzf "$cache" -C "$extract_root"
+  else
+    tar -xzf "$cache" -C "$extract_root"
+  fi
   if [[ ! -d "$extract_root/python" ]]; then
     echo "error: expected python/ directory in $tarball" >&2
     exit 1
@@ -177,11 +206,7 @@ esac
 
 # Official Node Windows builds are .zip; macOS/Linux are .tar.gz.
 if [[ "$PLATFORM" == "win32" ]]; then
-  if [[ -n "${RUNNER_TEMP:-}" ]]; then
-    NODE_CACHE_ROOT="$RUNNER_TEMP/seedmask-runtime-cache"
-  else
-    NODE_CACHE_ROOT="$CACHE_DIR"
-  fi
+  NODE_CACHE_ROOT="$(win_cache_root)"
   mkdir -p "$NODE_CACHE_ROOT"
   NODE_CACHE="$NODE_CACHE_ROOT/${NODE_PKG}.zip"
   NODE_URL="https://nodejs.org/dist/v${NODE_VER}/${NODE_PKG}.zip"
@@ -196,7 +221,7 @@ if [[ "$PLATFORM" == "win32" ]]; then
     unzip -q "$NODE_CACHE" -d "$EXTRACT_TMP"
   else
     # Git Bash / some CI images ship bsdtar capable of zip.
-    tar -xf "$NODE_CACHE" -C "$EXTRACT_TMP"
+    tar --force-local -xf "$NODE_CACHE" -C "$EXTRACT_TMP"
   fi
   if [[ -d "$EXTRACT_TMP/$NODE_PKG" ]]; then
     mv "$EXTRACT_TMP/$NODE_PKG"/* "$NODE_DIR"/
