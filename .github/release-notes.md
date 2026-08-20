@@ -1,12 +1,9 @@
 ### ✨ Highlights
-- First Windows x64 installer (NSIS + portable zip)
-- Windows Bluetooth stack rebuild for Ledger and OneKey (BLE-capable devices)
-- Platform-aware wording (this PC / this Mac) in settings and wallet remove flow
+- Windows in-app updates install silently and relaunch (no installer wizard)
 
 ### 🐛 Bugs fixed
-- Windows CI packaging: runtime download/extract, pip paths, and electron-builder publish cleanup
-- Mac-only “this Mac” copy shown on Windows
+- In-app update opened “Choose installation options” and could leave you on the old version
+- What’s new could appear for a version that was not actually installed
 
 ### 🔧 Improvements
-- Safer Windows native rebuild path (USB/HID + noble) without breaking macOS packaging
-- Loading / install hints now match the OS you’re on
+- Clearer update install path on Windows (quit → silent install → restart)

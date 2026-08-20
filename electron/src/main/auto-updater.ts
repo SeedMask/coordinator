@@ -633,7 +633,9 @@ async function installUpdate(getMainWindow: GetMainWindow): Promise<{ ok: boolea
   }
 
   try {
-    autoUpdater.quitAndInstall(false, true)
+    // Windows/Linux: silent installer + relaunch. (false here opened the NSIS
+    // “Choose installation options” wizard and often left users on the old build.)
+    autoUpdater.quitAndInstall(true, true)
     return { ok: true }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)

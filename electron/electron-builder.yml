@@ -83,10 +83,13 @@ linux:
   maintainer: SeedMask
 
 nsis:
+  # First-time double-click install can show options. In-app updates use
+  # quitAndInstall(true, true) so the wizard stays silent and the app relaunches.
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   shortcutName: SeedMask Coordinator
+  runAfterFinish: true
 
 dmg:
   title: SeedMask Coordinator
