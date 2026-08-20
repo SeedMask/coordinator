@@ -1,12 +1,15 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { CalloutIcon, EyeSlashIcon } from '@renderer/components/icons'
 import { InfoTipButton } from '@renderer/components/settings/SettingsChrome'
+import { thisDevicePhrase } from '@renderer/utils/platformCopy'
 
 type Mode = 'encrypt' | 'unlock' | 'change'
 
 const HINT_MAX = 80
-const HINT_INFO =
-  'A reminder only you will understand. Optional, and stored in plaintext on this Mac — don’t put the password itself in the hint.'
+
+function hintInfoText(): string {
+  return `A reminder only you will understand. Optional, and stored in plaintext on ${thisDevicePhrase()} — don’t put the password itself in the hint.`
+}
 
 function PasswordInput({
   inputRef,
@@ -130,10 +133,11 @@ export function WalletPasswordModal({
     await onConfirm(password)
   }
 
+  const device = thisDevicePhrase()
   const title = encryptExistingFlow
     ? 'Encrypt this wallet'
     : mode === 'encrypt'
-      ? 'Encrypt wallet on this Mac?'
+      ? `Encrypt wallet on ${device}?`
       : mode === 'change'
         ? 'Change password'
         : 'Unlock wallet'
@@ -152,7 +156,7 @@ export function WalletPasswordModal({
         <div className="wallet-password-warning" role="note">
           <strong>Before you encrypt</strong>
           <ul>
-            <li>Watch-only secrets on this Mac will be protected by your password.</li>
+            <li>Watch-only secrets on {device} will be protected by your password.</li>
             <li>
               If you forget the password, SeedMask cannot recover this wallet. You would need to import your
               xpub or descriptor again.
@@ -182,7 +186,7 @@ export function WalletPasswordModal({
           <ul>
             <li>Leave blank to store this watch-only wallet unencrypted on disk.</li>
             <li>If you set a password, remember it. SeedMask cannot recover a forgotten password.</li>
-            <li>A hint is optional and stored in plaintext on this Mac.</li>
+            <li>A hint is optional and stored in plaintext on {device}.</li>
           </ul>
         </div>
       )
@@ -290,7 +294,7 @@ export function WalletPasswordModal({
               <label className="field" style={{ display: 'block', marginTop: 10 }}>
                 <span className="wallet-password-hint-label">
                   <span className="field-label">Hint (optional)</span>
-                  <InfoTipButton text={HINT_INFO} />
+                  <InfoTipButton text={hintInfoText()} />
                 </span>
                 <input
                   className="seed-mask-field"

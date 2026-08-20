@@ -1,9 +1,11 @@
 import { useApp } from '@renderer/state/AppProvider'
 import { SeedMaskLogoMark } from '@renderer/components/BrandMarks'
 import { EyeSlashIcon } from '@renderer/components/icons'
+import { thisDevicePhrase } from '@renderer/utils/platformCopy'
 
 export function WelcomeView(): React.JSX.Element {
   const { markWelcomeSeen, setIsAddingWallet } = useApp()
+  const device = thisDevicePhrase()
 
   function begin(): void {
     markWelcomeSeen()
@@ -27,7 +29,8 @@ export function WelcomeView(): React.JSX.Element {
           for Kaspa
         </h1>
         <p className="muted welcome-lead">
-          Your seed never touches this Mac. Import a kpub, track balances, build transactions, and sign on your SeedMask device.
+          Your seed never touches {device}. Import a kpub, track balances, build transactions, and sign on your
+          SeedMask device.
         </p>
 
         <div className="welcome-chips">
@@ -35,7 +38,7 @@ export function WelcomeView(): React.JSX.Element {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
               <path d="M12 2 4 5v6c0 5.25 3.4 10.15 8 11.35C16.6 21.15 20 16.25 20 11V5l-8-3Zm0 2.2 6 2.25V11c0 4.08-2.55 7.92-6 9.05-3.45-1.13-6-4.97-6-9.05V6.45l6-2.25Z" />
             </svg>
-            No seed on Mac
+            No seed on {device === 'this Mac' ? 'Mac' : device === 'this PC' ? 'PC' : 'device'}
           </span>
           <span className="welcome-chip">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden>

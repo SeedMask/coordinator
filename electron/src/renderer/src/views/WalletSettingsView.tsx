@@ -38,6 +38,7 @@ import {
   convertBitcoinExtendedPubkey,
   scriptNativeExtendedPrefix,
 } from '@renderer/utils/extendedKey'
+import { thisDevicePhrase, ThisDevicePhrase } from '@renderer/utils/platformCopy'
 import { orderedWalletsForChain } from '@renderer/utils/walletOrder'
 
 interface EditableCosigner {
@@ -1063,13 +1064,17 @@ export function WalletSettingsView(): React.JSX.Element {
         </div>
         <div className="card">
           <h3>Security</h3>
-          <p className="muted">This Mac stores extended public keys only — never your seed.</p>
+          <p className="muted">
+            {ThisDevicePhrase()} stores extended public keys only — never your seed.
+          </p>
         </div>
       </div>
     )
   }
 
   const coin = walletCoin(activeWallet)
+  const device = thisDevicePhrase()
+  const Device = ThisDevicePhrase()
 
   return (
     <div className="wallet-settings-page">
@@ -1279,16 +1284,16 @@ export function WalletSettingsView(): React.JSX.Element {
 
       <div className="card">
         <h3>Security</h3>
-        <p className="muted">This Mac stores extended public keys only — never your seed.</p>
+        <p className="muted">{Device} stores extended public keys only — never your seed.</p>
       </div>
 
       <div className="card wallet-danger-card">
         <h3>Remove wallet</h3>
         <p className="muted">
-          Deletes watch-only data from this Mac. On-chain funds are not affected.
+          Deletes watch-only data from {device}. On-chain funds are not affected.
         </p>
         <button type="button" className="btn btn-danger" onClick={() => setShowRemoveConfirm(true)}>
-          Remove wallet from this Mac
+          Remove wallet from {device}
         </button>
       </div>
 
@@ -1297,7 +1302,8 @@ export function WalletSettingsView(): React.JSX.Element {
           <div className="modal-card" role="dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Remove this wallet?</h3>
             <p className="muted">
-              Clears this wallet&apos;s {extendedKeyLabel(coin)} from this Mac. Funds stay on-chain — re-import anytime.
+              Clears this wallet&apos;s {extendedKeyLabel(coin)} from {device}. Funds stay on-chain — re-import
+              anytime.
             </p>
             <div className="row spread" style={{ marginTop: 16 }}>
               <button type="button" className="btn btn-ghost" onClick={() => setShowRemoveConfirm(false)}>

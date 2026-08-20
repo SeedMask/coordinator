@@ -16,6 +16,7 @@ import { bitcoinHubLabel, kaspaHubLabel } from '@renderer/utils/networkSettings'
 import { ConnectionsSettingsView, type ConnectionsDestination } from './ConnectionsSettingsView'
 import { useUpdaterStatus } from '@renderer/hooks/useUpdaterStatus'
 import { AddressDisplay } from '@renderer/components/AddressDisplay'
+import { ThisDevicePhrase } from '@renderer/utils/platformCopy'
 
 type SystemPane = 'general' | 'connections'
 
@@ -310,7 +311,7 @@ function GeneralSettingsPanel(): React.JSX.Element {
       <SettingsSectionBlock title="Security">
         <SettingsFriendlyCallout
           icon="shield"
-          text="This Mac only stores watch-only public keys. Your seed and private key never leave your hardware device."
+          text={`${ThisDevicePhrase()} only stores watch-only public keys. Your seed and private key never leave your hardware device.`}
         />
       </SettingsSectionBlock>
     </SettingsPageLayout>

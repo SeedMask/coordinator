@@ -29,8 +29,47 @@ import {
   completeBitcoinSettings,
   splitNetworkLines,
 } from '@renderer/utils/networkSettings'
+import { getHostPlatform, thisDevicePhrase } from '@renderer/utils/platformCopy'
 
 type ConnectionsDestination = 'overview' | 'bitcoin' | 'kaspa'
+
+function bitcoinCoreHttpTip(): string {
+  const p = getHostPlatform()
+  const host = p === 'darwin' ? 'your Mac' : p === 'win32' ? 'your PC' : 'this computer'
+  return `Enter the node's hostname or IP only (e.g. 127.0.0.1). Port goes in the box beside it. Standard Bitcoin Core RPC on ${host} uses plain HTTP — not HTTPS.`
+}
+
+function bitcoinCoreDataHint(): string {
+  const p = getHostPlatform()
+  if (p === 'win32') {
+    return 'Bitcoin Core data directory, or path to .cookie. Default on Windows: %APPDATA%\\Bitcoin'
+  }
+  if (p === 'darwin') {
+    return 'Bitcoin Core data directory, or path to .cookie. Default on macOS: ~/Library/Application Support/Bitcoin'
+  }
+  return 'Bitcoin Core data directory, or path to .cookie. Default on Linux: ~/.bitcoin'
+}
+
+function bitcoinCoreDataPlaceholder(): string {
+  const p = getHostPlatform()
+  if (p === 'win32') return '%APPDATA%\\Bitcoin'
+  if (p === 'darwin') return '~/Library/Application Support/Bitcoin'
+  return '~/.bitcoin'
+}
+
+function bitcoinConfPathHint(): string {
+  const p = getHostPlatform()
+  if (p === 'win32') return '%APPDATA%\\Bitcoin\\bitcoin.conf'
+  if (p === 'darwin') return '~/Library/Application Support/Bitcoin/bitcoin.conf'
+  return '~/.bitcoin/bitcoin.conf'
+}
+
+function bitcoinConfOsLabel(): string {
+  const p = getHostPlatform()
+  if (p === 'win32') return 'Windows'
+  if (p === 'darwin') return 'macOS'
+  return 'Linux'
+}
 
 export type { ConnectionsDestination }
 
@@ -251,7 +290,7 @@ function BitcoinNetworkSettingsPage({
           <SettingsHostPortField
             label="URL"
             hint="Hostname or IP address — port is entered separately. Local Core uses plain HTTP."
-            infoTip="Enter the node's hostname or IP only (e.g. 127.0.0.1). Port goes in the box beside it. Standard Bitcoin Core RPC on your Mac uses plain HTTP — not HTTPS."
+            infoTip={bitcoinCoreHttpTip()}
             host={draft.bitcoin.core_host}
             port={draft.bitcoin.core_port}
             hostPlaceholder="127.0.0.1"
@@ -269,8 +308,8 @@ function BitcoinNetworkSettingsPage({
           />
           <SettingsField
             label="RPC password"
-            hint="From bitcoin.conf — stored only in your local settings file on this Mac."
-            infoTip="The rpcpassword= value from bitcoin.conf. Stored locally in ~/.seedmask-coordinator/network_settings.json on this Mac only."
+            hint={`From bitcoin.conf — stored only in your local settings file on ${thisDevicePhrase()}.`}
+            infoTip={`The rpcpassword= value from bitcoin.conf. Stored locally in ~/.seedmask-coordinator/network_settings.json on ${thisDevicePhrase()} only.`}
             value={draft.bitcoin.core_password}
             placeholder="rpcpassword"
             password
@@ -278,10 +317,10 @@ function BitcoinNetworkSettingsPage({
           />
           <SettingsPathBrowseField
             label="Data folder"
-            hint="Bitcoin Core data directory, or path to .cookie. Default on macOS: ~/Library/Application Support/Bitcoin"
+            hint={bitcoinCoreDataHint()}
             infoTip="The folder where Bitcoin Core stores its data. If you pick a folder, the app looks for a .cookie file inside it for default authentication. You can also paste or choose the .cookie file directly."
             value={draft.bitcoin.core_cookie_path}
-            placeholder="~/Library/Application Support/Bitcoin"
+            placeholder={bitcoinCoreDataPlaceholder()}
             panelMessage="Choose your Bitcoin Core data folder, or select the .cookie file directly."
             onChange={(v) => editor.patchBitcoin((b) => ({ ...b, core_cookie_path: v }), 'bitcoin')}
           />
@@ -748,11 +787,11 @@ function BitcoinCoreOwnNodeGuide({ onClose }: { onClose: () => void }): React.JS
           <section>
             <h4>Turn on RPC (one-time)</h4>
             <p>
-              Coordinator talks to Core through RPC on this Mac. Add these lines to{' '}
+              Coordinator talks to Core through RPC on {thisDevicePhrase()}. Add these lines to{' '}
               <code>bitcoin.conf</code>, then restart Bitcoin Core:
             </p>
             <p className="muted own-node-guide-path">
-              Usual file on macOS: <code>~/Library/Application Support/Bitcoin/bitcoin.conf</code>
+              Usual file on {bitcoinConfOsLabel()}: <code>{bitcoinConfPathHint()}</code>
             </p>
             <GuideCommandBlock text={BITCOIN_CONF_SNIPPET} />
             <p className="muted">
