@@ -18,10 +18,6 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
-        working-directory: electron
 
     env:
       # Unsigned preview builds — do not look for a Windows code-signing cert.
@@ -39,15 +35,29 @@ jobs:
           cache-dependency-path: electron/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        working-directory: electron
+        shell: pwsh
+        run: |
+          Write-Host "cwd=$(Get-Location)"
+          Get-ChildItem
+          if (-not (Test-Path package-lock.json)) { throw "missing electron/package-lock.json" }
+          npm ci
 
       - name: Build Windows x64 release
-        run: npm run release
+        working-directory: electron
+        shell: bash
+        run: |
+          set -euo pipefail
+          pwd
+          ls -la
+          npm run release
 
       - name: List release outputs
+        working-directory: electron
+        shell: bash
         run: |
-          ls -la release/
-          ls -la release/*win* release/*Setup* release/*.exe release/*.zip 2>/dev/null || true
+          ls -la release/ || true
+          ls -la release/*win* release/*.exe release/*.zip release/latest.yml 2>/dev/null || true
 
       - name: Upload Actions artifacts
         uses: actions/upload-artifact@v4
