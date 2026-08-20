@@ -3,6 +3,7 @@ export {}
 declare global {
   interface Window {
     seedmask: {
+      getPlatform: () => string
       getBackendPort: () => Promise<number>
       getBackendLogPath: () => Promise<string | null>
       waitBackendReady: () => Promise<{

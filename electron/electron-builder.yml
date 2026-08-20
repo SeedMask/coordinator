@@ -62,9 +62,14 @@ mac:
 
 win:
   icon: build/icon.png
+  # Explicit x64 only — do not ship Mac/ARM Windows targets from this config.
   target:
-    - nsis
-    - zip
+    - target: nsis
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
 
 linux:
   icon: build/icon.png

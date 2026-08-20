@@ -1,0 +1,75 @@
+name: Windows release build
+
+# Builds Windows x64 installers only. Does not build or replace macOS artifacts.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing GitHub Release tag to attach Windows assets to (e.g. v1.0.4). Leave empty to upload Actions artifacts only."
+        required: false
+        default: "v1.0.4"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: electron
+
+    env:
+      # Unsigned preview builds — do not look for a Windows code-signing cert.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Windows x64 release
+        run: npm run release
+
+      - name: List release outputs
+        run: |
+          ls -la release/
+          ls -la release/*win* release/*Setup* release/*.exe release/*.zip 2>/dev/null || true
+
+      - name: Upload Actions artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: seedmask-coordinator-windows-x64
+          path: |
+            electron/release/*win*
+            electron/release/*.exe
+            electron/release/latest.yml
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: >-
+          startsWith(github.ref, 'refs/tags/') ||
+          (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          files: |
+            electron/release/*win*
+            electron/release/*.exe
+            electron/release/latest.yml
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

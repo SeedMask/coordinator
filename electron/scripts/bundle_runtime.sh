@@ -140,17 +140,40 @@ case "$PLATFORM:$ARCH" in
   *) echo "error: no Node package for $PLATFORM $ARCH" >&2; exit 1 ;;
 esac
 
-NODE_CACHE="$CACHE_DIR/${NODE_PKG}.tar.gz"
-NODE_URL="https://nodejs.org/dist/v${NODE_VER}/${NODE_PKG}.tar.gz"
-if [[ ! -f "$NODE_CACHE" ]]; then
-  echo "    Downloading $NODE_URL"
-  curl -fsSL "$NODE_URL" -o "$NODE_CACHE"
-fi
-tar -xzf "$NODE_CACHE" -C "$NODE_DIR" --strip-components=1
+# Official Node Windows builds are .zip; macOS/Linux are .tar.gz.
 if [[ "$PLATFORM" == "win32" ]]; then
-  chmod +x "$NODE_DIR/node.exe" 2>/dev/null || true
+  NODE_CACHE="$CACHE_DIR/${NODE_PKG}.zip"
+  NODE_URL="https://nodejs.org/dist/v${NODE_VER}/${NODE_PKG}.zip"
+  if [[ ! -f "$NODE_CACHE" ]]; then
+    echo "    Downloading $NODE_URL"
+    curl -fsSL "$NODE_URL" -o "$NODE_CACHE"
+  fi
+  EXTRACT_TMP="$RUNTIME/.node_extract"
+  rm -rf "$EXTRACT_TMP"
+  mkdir -p "$EXTRACT_TMP"
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$NODE_CACHE" -d "$EXTRACT_TMP"
+  else
+    # Git Bash / some CI images ship bsdtar capable of zip.
+    tar -xf "$NODE_CACHE" -C "$EXTRACT_TMP"
+  fi
+  if [[ -d "$EXTRACT_TMP/$NODE_PKG" ]]; then
+    mv "$EXTRACT_TMP/$NODE_PKG"/* "$NODE_DIR"/
+  else
+    echo "error: unexpected Node zip layout in $NODE_CACHE" >&2
+    exit 1
+  fi
+  rm -rf "$EXTRACT_TMP"
+  test -f "$NODE_DIR/node.exe"
   echo "    Node: $("$NODE_DIR/node.exe" --version)"
 else
+  NODE_CACHE="$CACHE_DIR/${NODE_PKG}.tar.gz"
+  NODE_URL="https://nodejs.org/dist/v${NODE_VER}/${NODE_PKG}.tar.gz"
+  if [[ ! -f "$NODE_CACHE" ]]; then
+    echo "    Downloading $NODE_URL"
+    curl -fsSL "$NODE_URL" -o "$NODE_CACHE"
+  fi
+  tar -xzf "$NODE_CACHE" -C "$NODE_DIR" --strip-components=1
   chmod +x "$NODE_DIR/bin/node"
   echo "    Node: $("$NODE_DIR/bin/node" --version)"
 fi

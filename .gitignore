@@ -16,10 +16,14 @@ electron/node_modules/
 electron/out/
 electron/release/
 electron/dist/
-electron/build/
+# Bundled runtimes are OS-specific and rebuilt in CI / release scripts.
+electron/build/runtime/
 electron/*.tsbuildinfo
 .cache/
 *.log
+
+# Keep app icons + mac entitlements in git (needed for CI packaging).
+# Do not ignore electron/build/ entirely.
 
 # Installers / binaries (publish via GitHub Releases)
 *.dmg

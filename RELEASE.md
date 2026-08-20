@@ -69,8 +69,10 @@ The download page reads `website/downloads/manifest.js` for version and file nam
 Use a matrix build on **this** repo only:
 
 - `macos-latest` → `npm run release` → upload `release/*mac*`
-- `windows-latest` → `npm run release` → upload `release/*win*`
+- `windows-latest` → `npm run release` → upload `release/*win*` (see `.github/workflows/release-windows.yml`)
 - `ubuntu-latest` → `npm run release` → upload `release/*linux*`
+
+The Windows workflow builds **x64 only** and never replaces macOS Release assets.
 
 Merge artifacts and run `sync_website_downloads.sh` before deploying the website.
 

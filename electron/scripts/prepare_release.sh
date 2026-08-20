@@ -51,7 +51,14 @@ echo "build $STAMP" > "$COORD/BUILD_STAMP.txt"
 echo "Syncing SeedMask tools into coordinator/tools…"
 mkdir -p "$COORD/tools"
 if [[ -n "$FIRMWARE_TOOLS" ]]; then
-  rsync -a --delete "$FIRMWARE_TOOLS/" "$COORD/tools/"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete "$FIRMWARE_TOOLS/" "$COORD/tools/"
+  else
+    # Windows CI often has no rsync — copy is enough for a clean tools tree.
+    rm -rf "$COORD/tools"
+    mkdir -p "$COORD/tools"
+    cp -a "$FIRMWARE_TOOLS"/. "$COORD/tools/"
+  fi
 elif [[ -d "$COORD/tools" ]] && compgen -G "$COORD/tools/*" >/dev/null; then
   echo "warn: firmware tools folder not found — using existing coordinator/tools"
 else
@@ -109,4 +116,7 @@ if [[ "$SKIP_RUNTIME" -eq 0 ]]; then
   bash "$SCRIPT_DIR/smoke_test_backend.sh" "$ELECTRON_DIR/build/runtime" "$COORD"
 fi
 
-bash "$SCRIPT_DIR/sync_website_downloads.sh" 2>/dev/null || true
+# Local Mac website sync only — CI ships installer assets via the Release workflow.
+if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
+  bash "$SCRIPT_DIR/sync_website_downloads.sh" 2>/dev/null || true
+fi

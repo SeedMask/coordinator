@@ -14,6 +14,7 @@ export interface OpenFileOptions {
 }
 
 contextBridge.exposeInMainWorld('seedmask', {
+  getPlatform: (): string => process.platform,
   getBackendPort: (): Promise<number> => ipcRenderer.invoke('backend:get-port'),
   getBackendLogPath: (): Promise<string | null> => ipcRenderer.invoke('backend:get-log-path'),
   waitBackendReady: (): Promise<{
