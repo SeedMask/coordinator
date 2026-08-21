@@ -5,11 +5,13 @@
 import { UR, UREncoder } from '@ngraveio/bc-ur'
 import QRCode from 'qrcode'
 
-const STATIC_MAX_QR_MODULES = 129
-const STATIC_MAX_URI_CHARS = 2800
+const STATIC_MAX_QR_MODULES = 177
+const STATIC_MAX_URI_CHARS = 3200
 const MAX_ANIMATED_PARTS = 16
-/** Soft animated frames for SeedMask camera (~version 10–12 QR). */
-const TARGET_ANIMATED_MODULES = 61
+/** Match coordinator `TARGET_QR_MODULES` — fewer parts first, density only breaks ties. */
+const TARGET_ANIMATED_MODULES = 101
+/** Prefer multipart over a single tiny/dense frame (matches Python MAX_QR_MODULES_SINGLE). */
+const MAX_QR_MODULES_SINGLE = 41
 const MAX_URI_CHARS_PER_PART = 900
 const ANIMATED_FRAME_MS = 450
 /** High-res frames so fullscreen enlarge is crisp (modal scales down with CSS). */
@@ -17,6 +19,7 @@ const QR_WIDTH = 720
 const MIN_FRAGMENT = 10
 const FRAGMENT_CANDIDATES = [
   25, 30, 35, 40, 45, 50, 55, 60, 70, 80, 90, 100, 120, 150, 180, 200, 250, 300, 350, 400,
+  450, 500, 600, 700, 800,
 ] as const
 
 export type ExportQrPackDto = { frames: string[]; frameMs: number }
@@ -32,8 +35,8 @@ function modulesForUri(uri: string): number {
 }
 
 /**
- * Soft animated QRs: stay near TARGET_ANIMATED_MODULES, ≤MAX_ANIMATED_PARTS.
- * Prefer under-target density first, then fewer parts (not maxed-out fragmentation).
+ * Match coordinator `pick_fragment_len`: ≤MAX_ANIMATED_PARTS, prefer fewer parts,
+ * then stay near TARGET_ANIMATED_MODULES (not maximum fragmentation).
  */
 function pickFragmentLen(payload: Buffer): number {
   let best = 50
@@ -46,8 +49,10 @@ function pickFragmentLen(payload: Buffer): number {
     const part = enc.nextPart()
     if (part.length > MAX_URI_CHARS_PER_PART) continue
     const modules = modulesForUri(part)
+    if (seqLen === 1 && modules > MAX_QR_MODULES_SINGLE) continue
     const overTarget = Math.max(0, modules - TARGET_ANIMATED_MODULES)
-    const score: [number, number, number, number] = [overTarget, seqLen, modules, part.length]
+    // seqLen first — same order as Python ur_qr.pick_fragment_len
+    const score: [number, number, number, number] = [seqLen, overTarget, modules, part.length]
     if (
       score[0] < bestScore[0] ||
       (score[0] === bestScore[0] && score[1] < bestScore[1]) ||

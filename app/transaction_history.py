@@ -474,6 +474,8 @@ async def refresh_kaspa_confirmation_counts(
     now = _time.time()
 
     # Hydrate stub / just-broadcast rows so Unconfirmed → live confirmation counts.
+    # Prefer undated rows first — UTXO gap-fills use block_time=0 and were previously
+    # sorted last, so Asset History never got real timestamps (chart stuck at last dated tx).
     if hydrate:
         need_hydrate: list[dict] = []
         for d in dicts:
@@ -485,20 +487,30 @@ async def refresh_kaspa_confirmation_counts(
                 conf = 0
             if conf >= 200:
                 continue
-            if _accepting_blue_from_tx(d) > 0:
+            if _accepting_blue_from_tx(d) > 0 and int(d.get("block_time") or 0) > 0:
                 continue
             if not _norm_txid(str(d.get("transaction_id") or "")):
                 continue
             need_hydrate.append(d)
-        need_hydrate.sort(key=lambda row: int(row.get("block_time") or 0), reverse=True)
+
+        def _hydrate_priority(row: dict) -> tuple[int, int]:
+            try:
+                bt = int(row.get("block_time") or 0)
+            except (TypeError, ValueError):
+                bt = 0
+            # Undated first (0), then newest dated.
+            return (0 if bt <= 0 else 1, -bt)
+
+        need_hydrate.sort(key=_hydrate_priority)
+        hydrate_cap = 32
         if need_hydrate:
             fetched = await asyncio.gather(
                 *[
                     _fetch_kaspa_tx_acceptance(str(d.get("transaction_id") or ""))
-                    for d in need_hydrate[:8]
+                    for d in need_hydrate[:hydrate_cap]
                 ]
             )
-            for d, info in zip(need_hydrate[:8], fetched):
+            for d, info in zip(need_hydrate[:hydrate_cap], fetched):
                 if not info:
                     continue
                 accepting_blue = _accepting_blue_from_tx(info)
@@ -1042,6 +1054,7 @@ def merge_receive_utxos_into_tx_dicts(
     utxos: list,
     *,
     coin: str = "kaspa",
+    wallet_id: str | None = None,
 ) -> list[dict]:
     """Ensure live receive UTXOs appear even when history cache / indexer lag."""
     coin_key = (coin or "kaspa").strip().lower()
@@ -1078,12 +1091,26 @@ def merge_receive_utxos_into_tx_dicts(
     if not receive_sompi:
         return list(dicts or [])
 
+    from .tx_raw_cache import cached_wallet_tx
+
     for txid, sompi in receive_sompi.items():
+        bt = 0
+        # Prefer a real chain timestamp from the raw tx cache when available.
+        if wallet_id:
+            raw = cached_wallet_tx(wallet_id, txid)
+            if isinstance(raw, dict):
+                try:
+                    bt = _block_time_seconds(
+                        int(raw.get("block_time") or raw.get("accepting_block_time") or 0)
+                    )
+                except (TypeError, ValueError):
+                    bt = 0
         by_id[txid] = WalletTx(
             transaction_id=txid,
             direction="received",
             amount_kas=sompi / unit,
-            block_time=0,
+            # 0 = Pending in the list; Asset History treats undated as "now" until hydrate.
+            block_time=bt,
             counterparty="",
         ).to_dict()
 

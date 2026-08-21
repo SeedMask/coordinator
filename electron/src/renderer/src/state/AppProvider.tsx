@@ -156,7 +156,7 @@ interface AppContextValue {
   /** Prompt unlock if needed; resolves true when secrets are available. */
   requestWalletUnlock: (id: string, hint?: WalletDTO) => Promise<boolean>
   refreshActiveWallet: () => Promise<void>
-  refreshAfterSuccessfulSend: () => Promise<void>
+  refreshAfterSuccessfulSend: (touchAddresses?: string[]) => Promise<void>
   /** Insert a just-broadcast send at the top of the list immediately (before indexer catch-up). */
   notePendingSend: (tx: {
     transaction_id: string
@@ -1122,14 +1122,6 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     setBalanceKasValue(nextBalance)
   }
 
-  function mergeWalletTransactions(
-    cached: WalletTxDTO[],
-    incoming: WalletTxDTO[],
-    chain: CoinChain,
-  ): WalletTxDTO[] {
-    return dedupeWalletTransactions([...cached, ...incoming], chain)
-  }
-
   async function loadTransactionsFor(
     walletId: string,
     query?: string,
@@ -1143,23 +1135,26 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     const cached = filterTransactionsForChain(snap.transactions, chain)
     const loadGen = (txLoadGenRef.current[walletId] ?? 0) + 1
     txLoadGenRef.current[walletId] = loadGen
+    // Shared `transactions` state feeds Asset History + Dashboard. Never publish a
+    // search-filtered subset here — Dashboard filters locally for display.
+    if (query?.trim()) {
+      return
+    }
     if (!opts?.quiet && shouldPublishWalletUi(walletId) && cached.length > 0) {
       setTransactions(cached)
     }
     try {
-      const res = await client.transactions(walletId, query, { refresh: opts?.refresh })
+      const res = await client.transactions(walletId, undefined, { refresh: opts?.refresh })
       if (txLoadGenRef.current[walletId] !== loadGen) return
       const incoming = filterTransactionsForChain(
         res.transactions.map(normalizeWalletTx),
         chain,
       )
-      const merged = query?.trim()
-        ? mergeWalletTransactions(cached, incoming, chain)
-        : dedupeWalletTransactions(
-            // Keep local confirmation progress when a slower quiet poll returns an older tip.
-            incoming.length > 0 ? [...cached, ...incoming] : cached,
-            chain,
-          )
+      const merged = dedupeWalletTransactions(
+        // Keep local confirmation progress when a slower quiet poll returns an older tip.
+        incoming.length > 0 ? [...cached, ...incoming] : cached,
+        chain,
+      )
       if (merged.length > 0 || cached.length === 0) {
         snap.transactions = merged
         snapshotsRef.current[walletId] = snap
@@ -1204,17 +1199,19 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     try {
       const addrs = (await api.addresses(walletId)).addresses
       if (!addrs.length) return
+      const receive = addrs.map((a) => ({
+        index: a.index,
+        address: a.address,
+        is_change: false,
+        balance_sompi: 0,
+        balance_kas: 0,
+      }))
+      const next = receive[0]
       const book: AddressBookResponse = {
-        receive: addrs.map((a) => ({
-          index: a.index,
-          address: a.address,
-          is_change: false,
-          balance_sompi: 0,
-          balance_kas: 0,
-        })),
+        receive,
         change: [],
-        next_receive_index: addrs[0]?.index ?? 0,
-        next_receive_address: addrs[0]?.address ?? '',
+        next_receive_index: next?.index ?? 0,
+        next_receive_address: next?.address ?? '',
       }
       addressBooksRef.current[walletId] = book
       if (walletId === activeWalletIdRef.current) {
@@ -2058,10 +2055,26 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     updateScanStatusMessage()
   }, [updateScanStatusMessage])
 
-  const refreshAfterSuccessfulSend = useCallback(async () => {
+  const refreshAfterSuccessfulSend = useCallback(async (touchAddresses?: string[]) => {
     if (!activeWallet) return
+    const client = apiRef.current
     setStatusMessage('Updating balance…')
-    await requestBackgroundSync(activeWallet.id, 'hot', true)
+    const extras = (touchAddresses ?? []).map((a) => a.trim()).filter(Boolean)
+    try {
+      // Fast hot refresh that always includes recipient + change from this send.
+      if (client && extras.length > 0) {
+        const bal = await client.refreshWatch(activeWallet.id, extras)
+        if (bal?.utxos) {
+          await loadWalletStateFromBackend(activeWallet.id, true)
+        } else {
+          await requestBackgroundSync(activeWallet.id, 'hot', true)
+        }
+      } else {
+        await requestBackgroundSync(activeWallet.id, 'hot', true)
+      }
+    } catch {
+      await requestBackgroundSync(activeWallet.id, 'hot', true)
+    }
     await loadWalletStateFromBackend(activeWallet.id, true)
     await ensureAddresses(activeWallet.id)
     await mergeAddressBalancesForWallet(activeWallet.id)

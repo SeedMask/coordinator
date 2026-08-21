@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { APIError } from '@renderer/api/client'
 import type { QRDisplayDensity, UtxoDTO } from '@renderer/api/types'
-import { coinUnit, looksLikeBitcoinAddress, qrDensityLabel, utxoMatchesChain, walletCoin } from '@renderer/api/types'
+import { coinUnit, looksLikeBitcoinAddress, qrDensityLabel, utxoCoinAmount, utxoMatchesChain, walletCoin } from '@renderer/api/types'
 import { useApp } from '@renderer/state/AppProvider'
 import { AnimatedQRView, DenseQRFullscreen, QrTransportControls } from '@renderer/components/AnimatedQRView'
 import { AddressDisplay } from '@renderer/components/AddressDisplay'
@@ -44,7 +44,6 @@ import {
   reviewCoinsForSidebar,
   reviewChangeKas,
   reviewFeeNote,
-  reviewAddressInputTotalKas,
   reviewInputTotalKas,
   reviewTotalFeeSompi,
   reviewWalletRemainderNote,
@@ -53,6 +52,12 @@ import {
   usedKeysFromUnsigned,
   type BuildSummary,
 } from '@renderer/utils/buildSummary'
+import {
+  applyLocalQrPackToBuild,
+  buildResponseForPack,
+  canLocalExportQr,
+  localExportQrPacks,
+} from '@renderer/utils/clientQr'
 import { groupUtxosByAddress } from '@renderer/utils/utxoHelpers'
 import { resolveSpendPool } from '@renderer/utils/sendSpendPool'
 import {
@@ -147,6 +152,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
   notePendingSend,
   refreshFiatPrices,
   fiatTick,
+  balanceKasValue,
     networkSettings,
   } = useApp()
 
@@ -168,7 +174,11 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
   const [signatureProgressCount, setSignatureProgressCount] = useState(0)
   const [signedValidationMessage, setSignedValidationMessage] = useState<string | null>(null)
   const [showScanner, setShowScanner] = useState(false)
+  /** Shared busy flag — pair with busyPhase so Broadcast never shows as "Building…". */
   const [busy, setBusy] = useState(false)
+  const [busyPhase, setBusyPhase] = useState<'idle' | 'build' | 'verify' | 'broadcast' | 'hw' | 'import'>(
+    'idle',
+  )
   const [validatingPayee, setValidatingPayee] = useState(false)
   const [feeEstimating, setFeeEstimating] = useState(false)
   const [reviewBuildKey, setReviewBuildKey] = useState(0)
@@ -231,6 +241,19 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
   const skipReviewAutoBuildRef = useRef(false)
   const suppressDraftInvalidationRef = useRef(false)
   const explicitDenseQrRef = useRef(false)
+  /** Cached Dense/Animated packs for the current draft — makes density toggle instant. */
+  const qrPackCacheRef = useRef<{
+    draftId: string
+    animated: import('@renderer/api/types').BuildTxResponse | null
+    static: import('@renderer/api/types').BuildTxResponse | null | 'unavailable'
+  } | null>(null)
+  /** Background Review build while still on Send — makes Review & Sign feel instant. */
+  const reviewPrefetchRef = useRef<{
+    key: string
+    promise: Promise<import('@renderer/api/types').BuildTxResponse>
+    result: import('@renderer/api/types').BuildTxResponse | null
+  } | null>(null)
+  const reviewPrefetchTimerRef = useRef<number | null>(null)
   const selectedChainRef = useRef(selectedChain)
   const amountEditSourceRef = useRef<AmountEditSource>(null)
   const prevChainRef = useRef(selectedChain)
@@ -257,6 +280,8 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
     setDraftId('')
     setQrFrames([])
     setQrModulesPerFrame(null)
+    qrPackCacheRef.current = null
+    reviewPrefetchRef.current = null
     setSignedJSON('')
     setSignedBroadcastReady(false)
     setSignatureProgressCount(0)
@@ -1156,6 +1181,18 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
       const frames = decodeQrImages(res)
       setQrFrames(frames)
 
+      if (res.draft_id) {
+        const cache = qrPackCacheRef.current?.draftId === res.draft_id
+          ? qrPackCacheRef.current
+          : { draftId: res.draft_id, animated: null, static: null as null | 'unavailable' }
+        if (actualDensity === 'static' && frames.length === 1 && !res.qr_fountain) {
+          cache.static = res
+        } else {
+          cache.animated = res
+        }
+        qrPackCacheRef.current = cache
+      }
+
       const sigLoaded = Math.max(0, Number(res.signatures_loaded ?? 0))
       const sigRequired = Math.max(0, Number(res.signatures_required ?? 0))
       const signingComplete = Boolean(res.signing_complete)
@@ -1214,14 +1251,59 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
     [setStatusMessage, applyBitcoinFeeState, isBitcoinSend, activeWallet?.hardware],
   )
 
+  // Prefetch the other QR density so Animated ↔ Dense toggles feel instant.
+  useEffect(() => {
+    if (!api || !draftId || step !== STEP_REVIEW || qrFrames.length === 0) return
+    const cache =
+      qrPackCacheRef.current?.draftId === draftId
+        ? qrPackCacheRef.current
+        : { draftId, animated: null, static: null as null | 'unavailable' }
+    qrPackCacheRef.current = cache
+    const needStatic = qrDensity === 'animated' && cache.static == null
+    const needAnimated = qrDensity === 'static' && cache.animated == null
+    if (!needStatic && !needAnimated) return
+    let cancelled = false
+    void (async () => {
+      if (needStatic) {
+        try {
+          const res = await api.draftQr(draftId, 'static', 0)
+          if (cancelled) return
+          const frames = decodeQrImages(res)
+          if (res.qr_display_mode === 'static' && frames.length === 1 && !res.qr_fountain) {
+            cache.static = res
+          } else {
+            cache.static = 'unavailable'
+          }
+        } catch {
+          if (!cancelled) cache.static = 'unavailable'
+        }
+      }
+      if (needAnimated) {
+        try {
+          const res = await api.draftQr(draftId, 'animated', 0)
+          if (cancelled) return
+          cache.animated = res
+        } catch {
+          /* keep null — toggle will fetch */
+        }
+      }
+      qrPackCacheRef.current = cache
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [api, draftId, step, qrDensity, qrFrames.length])
+
   const buildTransaction = useCallback(
     async (density: QRDisplayDensity, allowAnimatedFallback = true): Promise<boolean> => {
       if (!api || !activeWalletId) return false
+      setBusyPhase('build')
       setBusy(true)
       setBuildError(null)
       setQrFrames([])
       const qrDisplayMode: QRDisplayDensity =
         !isBitcoinSend && !explicitDenseQrRef.current ? 'animated' : density
+      const useLocalQr = !isBitcoinSend && canLocalExportQr()
       try {
         setStatusMessage('Building unsigned transaction…')
         const feeSompi =
@@ -1246,19 +1328,64 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
           setBuildError('Select a coin')
           return false
         }
-        const res = await api.buildTx({
-          utxoKeys: keys,
-          toAddress,
-          sendKas: 0,
-          feeSompi,
-          walletId: activeWalletId,
+
+        const prefetchKey = [
+          activeWalletId,
+          toAddress.trim(),
+          String(sendSompi),
+          String(feeSompi),
+          feeMode,
+          keys.join(','),
           qrDisplayMode,
-          rbf: isBitcoinSend && enableRbf,
-          useGenerator: !isBitcoinSend,
-          utxos: pool,
-          sendSompi,
-          customFee: !isBitcoinSend && feeMode === 'custom',
-        })
+        ].join('|')
+
+        let res: import('@renderer/api/types').BuildTxResponse
+        const pref = reviewPrefetchRef.current
+        if (pref && pref.key === prefetchKey) {
+          setStatusMessage('Finishing signing QR…')
+          res = pref.result ?? (await pref.promise)
+        } else {
+          res = await api.buildTx({
+            utxoKeys: keys,
+            toAddress,
+            sendKas: 0,
+            feeSompi,
+            walletId: activeWalletId,
+            qrDisplayMode,
+            includeQr: !useLocalQr,
+            rbf: isBitcoinSend && enableRbf,
+            useGenerator: !isBitcoinSend,
+            utxos: pool,
+            sendSompi,
+            customFee: !isBitcoinSend && feeMode === 'custom',
+          })
+        }
+
+        if (useLocalQr && decodeQrImages(res).length === 0 && res.qr_payload_text) {
+          setStatusMessage('Encoding signing QR…')
+          try {
+            const packs = await localExportQrPacks(res.qr_payload_text, 'ur')
+            const enriched = applyLocalQrPackToBuild(res, packs, qrDisplayMode)
+            if (res.draft_id) {
+              qrPackCacheRef.current = {
+                draftId: res.draft_id,
+                animated: buildResponseForPack(res, packs.animated, 'animated'),
+                static: packs.static
+                  ? buildResponseForPack(res, packs.static, 'static')
+                  : 'unavailable',
+              }
+            }
+            applyBuildResponse(enriched, qrDisplayMode)
+            return true
+          } catch {
+            // Local encode failed — fall through to server QR if present, else rebuild with PNG.
+            if (decodeQrImages(res).length === 0 && res.draft_id && api) {
+              setStatusMessage('Encoding signing QR…')
+              res = await api.draftQr(res.draft_id, qrDisplayMode, 0)
+            }
+          }
+        }
+
         applyBuildResponse(res, qrDisplayMode)
         return true
       } catch (e) {
@@ -1270,6 +1397,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
           qrDensityRef.current = 'animated'
           setStatusMessage('Transaction too large for dense QR — using animated QR…')
           setBusy(false)
+          setBusyPhase('idle')
           return buildTransactionRef.current('animated', false)
         }
         setBuildError(msg)
@@ -1278,6 +1406,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
         return false
       } finally {
         setBusy(false)
+        setBusyPhase('idle')
       }
     },
     [
@@ -1291,7 +1420,6 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
       orderedSelectedSpendUtxos,
       spendUtxos,
       toAddress,
-      isBitcoinSend,
       enableRbf,
       applyBuildResponse,
       setStatusMessage,
@@ -1315,6 +1443,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
         setStatusMessage(msg)
         return
       }
+      setBusyPhase('verify')
       setBusy(true)
       setSignedBroadcastReady(false)
       setSignatureProgressCount(0)
@@ -1365,6 +1494,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
         setStatusMessage(msg)
       } finally {
         setBusy(false)
+        setBusyPhase('idle')
       }
     },
     [api, draftId, signedJSON, setStatusMessage],
@@ -1395,6 +1525,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
       }
       setHwSignLink(link)
       setLedgerSigning(true)
+      setBusyPhase('hw')
       setBusy(true)
       setBuildError(null)
       setSignedValidationMessage(null)
@@ -1495,6 +1626,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
       } finally {
         setLedgerSigning(false)
         setBusy(false)
+        setBusyPhase('idle')
       }
     },
     [
@@ -1533,6 +1665,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
 
   const broadcast = useCallback(async () => {
     if (!api || !draftId || !signedJSON.trim()) return
+    setBusyPhase('broadcast')
     setBusy(true)
     try {
       setStatusMessage('Broadcasting…')
@@ -1558,13 +1691,17 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
         broadcastCloseTimerRef.current = null
         onCloseRef.current()
       }, 1000)
-      await refreshAfterSuccessfulSend()
+      const touch = [buildSummary?.toAddress ?? toAddress, buildSummary?.changeAddress]
+        .map((a) => (a ?? '').trim())
+        .filter(Boolean)
+      await refreshAfterSuccessfulSend(touch)
     } catch (e) {
       const msg = e instanceof APIError ? apiError(e.status ?? 400, e.message) : e instanceof Error ? e.message : 'Broadcast failed'
       setBuildError(msg)
       setStatusMessage(msg)
     } finally {
       setBusy(false)
+      setBusyPhase('idle')
     }
   }, [api, draftId, signedJSON, setStatusMessage, refreshAfterSuccessfulSend, notePendingSend, buildSummary, toAddress])
 
@@ -1674,28 +1811,122 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
 
   const toggleQrDensity = useCallback(() => {
     const newValue: QRDisplayDensity = qrDensity === 'animated' ? 'static' : 'animated'
-    explicitDenseQrRef.current = newValue === 'static'
-    setQrDensity(newValue)
     setDensityLabelFlash(qrDensityLabel(newValue))
     densityFlashGeneration.current += 1
     const gen = densityFlashGeneration.current
     setTimeout(() => {
       if (densityFlashGeneration.current === gen) setDensityLabelFlash(null)
-    }, 1500)
-    if (step === STEP_REVIEW && buildSummary && !busy) {
-      // Loaded handoff drafts often have empty Send form fields — don't rebuild from form.
-      if (!toAddressRef.current.trim() || !sendKASRef.current.trim()) {
-        setStatusMessage(
-          newValue === 'static'
-            ? 'Dense QR mode selected — rebuild from Send if frames look wrong'
-            : 'Animated QR mode selected — rebuild from Send if frames look wrong',
-        )
+    }, 400)
+
+    const applyCachedOrRes = (res: import('@renderer/api/types').BuildTxResponse): boolean => {
+      const frames = decodeQrImages(res)
+      const reportedStatic = res.qr_display_mode === 'static'
+      const isStaticQr = reportedStatic && frames.length === 1 && !res.qr_fountain
+      const actualDensity: QRDisplayDensity = isStaticQr ? 'static' : 'animated'
+      if (newValue === 'static' && !isStaticQr) {
+        if (draftId) {
+          qrPackCacheRef.current = {
+            draftId,
+            animated: qrPackCacheRef.current?.draftId === draftId ? qrPackCacheRef.current.animated : null,
+            static: 'unavailable',
+          }
+        }
+        setQrDensity('animated')
+        qrDensityRef.current = 'animated'
+        explicitDenseQrRef.current = false
+        setQrFrames(frames)
+        setQrAutoPlaying(frames.length > 1)
+        setBuildError(null)
+        setStatusMessage('Too large for dense QR — staying on animated')
+        return false
+      }
+      setQrDensity(actualDensity)
+      qrDensityRef.current = actualDensity
+      explicitDenseQrRef.current = actualDensity === 'static'
+      setQrFrameMs(res.qr_frame_ms ?? 480)
+      if (res.qr_display_pixels && res.qr_display_pixels > 0) {
+        setQrDisplaySize(Math.min(560, Math.max(420, res.qr_display_pixels)))
+      }
+      setQrModulesPerFrame(res.qr_modules_per_frame ?? null)
+      setQrFrames(frames)
+      setQrAutoPlaying(actualDensity === 'animated' && frames.length > 1)
+      if (frames.length === 0) {
+        setBuildError('Backend returned no QR image data')
+        return false
+      }
+      if (draftId) {
+        const cache =
+          qrPackCacheRef.current?.draftId === draftId
+            ? qrPackCacheRef.current
+            : { draftId, animated: null, static: null as null | 'unavailable' }
+        if (isStaticQr) cache.static = res
+        else cache.animated = res
+        qrPackCacheRef.current = cache
+      }
+      setBuildError(null)
+      setStatusMessage(
+        isStaticQr
+          ? 'Dense QR — tap for full screen, then scan on SeedMask'
+          : frames.length > 1
+            ? 'Animated QR — scan on SeedMask'
+            : 'QR ready — scan on SeedMask',
+      )
+      return true
+    }
+
+    // Instant swap when the other pack is already cached.
+    if (draftId && qrPackCacheRef.current?.draftId === draftId) {
+      const cache = qrPackCacheRef.current
+      if (newValue === 'static') {
+        if (cache.static === 'unavailable') {
+          setStatusMessage('Too large for dense QR — staying on animated')
+          return
+        }
+        if (cache.static) {
+          explicitDenseQrRef.current = true
+          applyCachedOrRes(cache.static)
+          return
+        }
+      } else if (cache.animated) {
+        explicitDenseQrRef.current = false
+        applyCachedOrRes(cache.animated)
         return
       }
-      reviewBuildStartedRef.current = 0
-      void buildTransaction(newValue)
     }
-  }, [qrDensity, step, buildSummary, busy, buildTransaction, setStatusMessage])
+
+    if (step !== STEP_REVIEW || !buildSummary || !api || !draftId) {
+      explicitDenseQrRef.current = newValue === 'static'
+      setQrDensity(newValue)
+      return
+    }
+
+    void (async () => {
+      // Keep current QR on screen until the new pack arrives (no blank gap).
+      explicitDenseQrRef.current = newValue === 'static'
+      try {
+        const res = await api.draftQr(draftId, newValue, 0)
+        applyCachedOrRes(res)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'QR rebuild failed'
+        const staticTooLarge = /too large for static|static qr needs|too large for a single qr/i.test(
+          msg.toLowerCase(),
+        )
+        if (staticTooLarge && newValue === 'static') {
+          qrPackCacheRef.current = {
+            draftId,
+            animated: qrPackCacheRef.current?.draftId === draftId ? qrPackCacheRef.current.animated : null,
+            static: 'unavailable',
+          }
+          explicitDenseQrRef.current = false
+          setQrDensity('animated')
+          qrDensityRef.current = 'animated'
+          setStatusMessage('Too large for dense QR — staying on animated')
+          return
+        }
+        setStatusMessage(msg)
+      }
+    })()
+  }, [qrDensity, step, buildSummary, api, draftId, setStatusMessage])
 
   const resetFlow = useCallback(() => {
     setStep(STEP_SEND)
@@ -1717,6 +1948,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
     setQrDensity('animated')
     qrDensityRef.current = 'animated'
     explicitDenseQrRef.current = false
+    qrPackCacheRef.current = null
     setQrAutoPlaying(true)
     ensureWalletCoinsSelected()
   }, [selectAllSpendableUtxos, ensureWalletCoinsSelected])
@@ -1783,9 +2015,16 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
           envelope.summary = {
             to_address: buildSummary.toAddress,
             send_kas: buildSummary.sendKas,
+            send_sompi: buildSummary.sendSompi,
             fee_sompi: buildSummary.feeSompi,
             from_address: buildSummary.fromAddress,
             input_count: buildSummary.inputCount,
+            input_total_sompi: buildSummary.inputTotalSompi,
+            input_total_kas: buildSummary.inputTotalKas,
+            change_sompi: buildSummary.changeSompi,
+            change_kas: buildSummary.changeKas,
+            change_address: buildSummary.changeAddress,
+            change_address_index: buildSummary.changeAddressIndex,
           }
         }
         const data = exportKaspaHandoffDraft(envelope)
@@ -1824,6 +2063,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
       if (!api) return
       const buf = await file.arrayBuffer()
       const bytes = new Uint8Array(buf)
+      setBusyPhase('import')
       setBusy(true)
       setBuildError(null)
       try {
@@ -1836,14 +2076,13 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
               : 'Loading transaction…',
         )
         // Prevent Review auto-rebuild + draft-invalidation from wiping imported QR.
+        // Bump the build key and mark it started *before* entering Review so the
+        // review-step effect cannot race and replace this import with a fresh buildTx.
         skipReviewAutoBuildRef.current = true
         suppressDraftInvalidationRef.current = true
-        if (reviewBuildKey === 0) {
-          setReviewBuildKey(1)
-          reviewBuildStartedRef.current = 1
-        } else {
-          reviewBuildStartedRef.current = reviewBuildKey
-        }
+        const nextReviewKey = reviewBuildKey + 1
+        reviewBuildStartedRef.current = nextReviewKey
+        setReviewBuildKey(nextReviewKey)
         const res = await api.importTxFile(buf, qrDensity)
         applyBuildResponse(res, qrDensity)
         setStep(STEP_REVIEW)
@@ -1862,6 +2101,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
         setStatusMessage(msg)
       } finally {
         setBusy(false)
+        setBusyPhase('idle')
       }
     },
     [api, qrDensity, applyBuildResponse, setStatusMessage, reviewBuildKey],
@@ -2017,7 +2257,120 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
     applyMaxRecipientForCurrentFee,
   ])
 
-  // Swift reviewStep `.task`: build once when review appears (always animated for Kaspa).
+  // Prefetch unsigned tx (+ payload) while still on Send so Review & Sign is snappy.
+  useEffect(() => {
+    if (step !== STEP_SEND || !api || !activeWalletId || !payeeStepValid) return
+    if (isUsbHardwareWallet) return
+
+    const feeSompi =
+      feeMode === 'custom'
+        ? (effectiveFeeSompi ?? networkFeeSompiRef.current)
+        : networkFeeSompiRef.current
+    if (feeSompi == null || feeSompi <= 0) return
+
+    const sendSompi = isBitcoinSend
+      ? parseDisplayToSompi(sendKASRef.current, sendChain, bitcoinDisplayUnit)
+      : parseSendSompi(sendKASRef.current)
+    if (sendSompi == null || sendSompi <= 0) return
+
+    const pool = spendUtxosRef.current
+    const keys = pool.map((u) => u.key).filter((k) => k.length > 0)
+    if (keys.length === 0) return
+
+    const qrDisplayMode: QRDisplayDensity = 'animated'
+    const key = [
+      activeWalletId,
+      toAddress.trim(),
+      String(sendSompi),
+      String(feeSompi),
+      feeMode,
+      keys.join(','),
+      qrDisplayMode,
+    ].join('|')
+
+    if (reviewPrefetchRef.current?.key === key) return
+
+    if (reviewPrefetchTimerRef.current) {
+      window.clearTimeout(reviewPrefetchTimerRef.current)
+      reviewPrefetchTimerRef.current = null
+    }
+
+    reviewPrefetchTimerRef.current = window.setTimeout(() => {
+      reviewPrefetchTimerRef.current = null
+      if (reviewPrefetchRef.current?.key === key) return
+      const useLocalQr = !isBitcoinSend && canLocalExportQr()
+      const promise = api
+        .buildTx({
+          utxoKeys: keys,
+          toAddress: toAddress.trim(),
+          sendKas: 0,
+          feeSompi,
+          walletId: activeWalletId,
+          qrDisplayMode,
+          includeQr: !useLocalQr,
+          rbf: isBitcoinSend && enableRbf,
+          useGenerator: !isBitcoinSend,
+          utxos: pool,
+          sendSompi,
+          customFee: !isBitcoinSend && feeMode === 'custom',
+        })
+        .then(async (res) => {
+          let out = res
+          if (useLocalQr && decodeQrImages(res).length === 0 && res.qr_payload_text) {
+            try {
+              const packs = await localExportQrPacks(res.qr_payload_text, 'ur')
+              out = applyLocalQrPackToBuild(res, packs, qrDisplayMode)
+              if (res.draft_id) {
+                qrPackCacheRef.current = {
+                  draftId: res.draft_id,
+                  animated: buildResponseForPack(res, packs.animated, 'animated'),
+                  static: packs.static
+                    ? buildResponseForPack(res, packs.static, 'static')
+                    : 'unavailable',
+                }
+              }
+            } catch {
+              /* Review will fall back to server/local encode */
+            }
+          }
+          if (reviewPrefetchRef.current?.key === key) {
+            reviewPrefetchRef.current.result = out
+          }
+          return out
+        })
+        .catch((err) => {
+          if (reviewPrefetchRef.current?.key === key) {
+            reviewPrefetchRef.current = null
+          }
+          throw err
+        })
+      reviewPrefetchRef.current = { key, promise, result: null }
+    }, 350)
+
+    return () => {
+      if (reviewPrefetchTimerRef.current) {
+        window.clearTimeout(reviewPrefetchTimerRef.current)
+        reviewPrefetchTimerRef.current = null
+      }
+    }
+  }, [
+    step,
+    api,
+    activeWalletId,
+    payeeStepValid,
+    isUsbHardwareWallet,
+    toAddress,
+    sendKAS,
+    feeMode,
+    effectiveFeeSompi,
+    networkFeeSompi,
+    isBitcoinSend,
+    sendChain,
+    bitcoinDisplayUnit,
+    enableRbf,
+    spendUtxos,
+  ])
+
   useEffect(() => {
     if (step !== STEP_REVIEW || reviewBuildKey === 0) return
     if (skipReviewAutoBuildRef.current) {
@@ -2057,13 +2410,34 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
     ? requiredSignatureCount
     : Math.min(requiredSignatureCount, Math.max(0, signatureProgressCount))
 
-  const reviewFooterTitle = busy ? 'Building…' : 'Broadcast'
+  const reviewFooterTitle =
+    busyPhase === 'broadcast' ? 'Broadcasting…' : busyPhase === 'build' ? 'Building…' : 'Broadcast'
   // Only light up after a fully verified / fully signed payload — never for partial or invalid loads.
   const reviewFooterEnabled = !busy && signedBroadcastReady
   const reviewFooterAction = async (): Promise<void> => {
     if (!signedBroadcastReady) return
     await broadcast()
   }
+
+  const busyStatusCopy =
+    busyPhase === 'broadcast'
+      ? 'Broadcasting to Kaspa mainnet…'
+      : busyPhase === 'verify'
+        ? 'Checking signed transaction…'
+        : ledgerSigning
+          ? `Waiting for ${usbHardwareLabel}…`
+          : isUsbHardwareWallet
+            ? `Preparing transaction for ${usbHardwareLabel}…`
+            : busyPhase === 'import'
+              ? 'Loading transaction…'
+              : 'Preparing transaction for SeedMask…'
+
+  const sidebarBusyCopy =
+    busyPhase === 'broadcast'
+      ? 'Broadcasting…'
+      : busyPhase === 'verify'
+        ? 'Verifying signed transaction…'
+        : 'Building transaction…'
 
   const sidebarCoins = reviewInputUtxos.length > 0
     ? reviewInputUtxos
@@ -2076,7 +2450,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
   if (!activeWallet) return <p className="muted">No active wallet.</p>
 
   return (
-    <div className="send-wizard" ref={layoutRef}>
+    <div className={`send-wizard${step === STEP_REVIEW ? ' send-wizard-review' : ''}`} ref={layoutRef}>
       {!broadcastDone && (
       <div className="send-wizard-top">
         <button type="button" className="send-wizard-back" onClick={onClose}>
@@ -2123,29 +2497,14 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
         </div>
       )}
 
-      {!broadcastDone && (
-      <div className="send-wizard-footer">
-        {step > 0 && (
-          <button type="button" className="btn btn-ghost" onClick={() => setStep(STEP_SEND)}>
-            Back
-          </button>
-        )}
-        <div style={{ flex: 1 }} />
-        {step >= STEP_REVIEW ? (
-          <button
-            type="button"
-            className="btn btn-primary send-footer-primary"
-            disabled={!reviewFooterEnabled || busy}
-            onClick={() => void reviewFooterAction()}
-          >
-            {reviewFooterTitle}
-          </button>
-        ) : null}
-      </div>
-      )}
-
-      {denseQrFullscreen && qrFrames[0] && (
-        <DenseQRFullscreen image={qrFrames[0]} onClose={() => setDenseQrFullscreen(false)} />
+      {denseQrFullscreen && qrFrames.length > 0 && (
+        <DenseQRFullscreen
+          frames={qrFrames}
+          frameIntervalMs={qrFrameMs}
+          isStatic={qrDensity === 'static' && qrFrames.length === 1}
+          isPlaying={qrAutoPlaying}
+          onClose={() => setDenseQrFullscreen(false)}
+        />
       )}
       {showPayeeScanner && (
         <QRScannerSheet
@@ -2568,7 +2927,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
             {busy ? (
               <>
                 <h4>Coins to sign</h4>
-                <p className="muted">Building transaction…</p>
+                <p className="muted">{sidebarBusyCopy}</p>
               </>
             ) : sidebarCoins.length === 0 ? (
               <>
@@ -2585,7 +2944,6 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
               <SelectedCoinsPanel
                 coins={sidebarCoins}
                 unitSymbol={unit}
-                walletUtxos={showAdvancedCoinControl ? undefined : spendableUtxos}
                 title="Coins to sign"
                 subtitle={reviewCoinsSidebarSubtitle(
                   buildSummary,
@@ -2593,6 +2951,28 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
                   orderedSelectedUtxos.length,
                   showAdvancedCoinControl,
                 )}
+                totalAmountLabel={
+                  sidebarCoins.length > 0
+                    ? formatCoinUnitsLabel(
+                        sidebarCoins.reduce((sum, u) => sum + utxoCoinAmount(u), 0),
+                        sendChain,
+                        bitcoinDisplayUnit,
+                      )
+                    : buildSummary
+                      ? formatCoinUnitsLabel(
+                          reviewInputTotalKas(buildSummary, totalSelectedKas),
+                          sendChain,
+                          bitcoinDisplayUnit,
+                        )
+                      : null
+                }
+                totalFiatLabel={
+                  sidebarCoins.length > 0
+                    ? coinFiatLine(sidebarCoins.reduce((sum, u) => sum + utxoCoinAmount(u), 0))
+                    : buildSummary
+                      ? coinFiatLine(reviewInputTotalKas(buildSummary, totalSelectedKas))
+                      : null
+                }
               />
             )}
           </aside>
@@ -2600,13 +2980,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
         <div className="send-review-main">
           {renderReviewSummary()}
           {busy && (
-            <p className="muted">
-              {ledgerSigning
-                ? `Waiting for ${usbHardwareLabel}…`
-                : isUsbHardwareWallet
-                  ? `Preparing transaction for ${usbHardwareLabel}…`
-                  : 'Preparing transaction for SeedMask…'}
-            </p>
+            <p className="muted">{busyStatusCopy}</p>
           )}
           {buildError && <p style={{ color: 'var(--danger)', fontSize: 13 }}>{buildError}</p>}
           {isUsbHardwareWallet && draftId && !signedBroadcastReady ? (
@@ -2677,7 +3051,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
                 frames={qrFrames}
                 frameIntervalMs={qrFrameMs}
                 maxDisplaySize={qrDisplaySize}
-                isStatic={qrDensity === 'static' || qrFrames.length <= 1}
+                isStatic={qrDensity === 'static' && qrFrames.length === 1}
                 allowDenseFullscreen
                 isPlaying={qrAutoPlaying}
                 onPlayingChange={setQrAutoPlaying}
@@ -2705,6 +3079,16 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
           ) : null}
 
           {renderSignPanel()}
+          <div className="send-review-broadcast-row">
+            <button
+              type="button"
+              className="btn btn-primary send-footer-primary"
+              disabled={!reviewFooterEnabled || busy}
+              onClick={() => void reviewFooterAction()}
+            >
+              {reviewFooterTitle}
+            </button>
+          </div>
         </div>
       </div>
       </>
@@ -2716,14 +3100,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
     const s = buildSummary
     const totalFeeSompi = reviewTotalFeeSompi(s)
     const feeKas = totalFeeSompi / 100_000_000
-    const spentAddressTotalKas = reviewAddressInputTotalKas(
-      s,
-      sidebarCoins,
-      spendableUtxos,
-      totalSelectedKas,
-    )
-    const actualInputKas = reviewInputTotalKas(s, totalSelectedKas)
-    const remainder = reviewWalletRemainderNote(s, totalSelectedKas, unit)
+    const remainder = reviewWalletRemainderNote(s, totalSelectedKas, unit, balanceKasValue)
 
     return (
       <div className="send-review-summary">
@@ -2783,17 +3160,6 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
             />
             {s.changeAddress && <InfoRow title="Return address" value={s.changeAddress} mono />}
           </>
-        )}
-        {(actualInputKas > 0 || spentAddressTotalKas > 0) && (
-          <InfoRow
-            title="Total amount"
-            value={formatCoinUnitsLabel(
-              actualInputKas > 0 ? actualInputKas : spentAddressTotalKas,
-              sendChain,
-              bitcoinDisplayUnit,
-            )}
-            fiat={coinFiatLine(actualInputKas > 0 ? actualInputKas : spentAddressTotalKas)}
-          />
         )}
         {remainder && (
           <div className="send-friendly-note">

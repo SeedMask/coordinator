@@ -217,8 +217,8 @@ export function QrTransportControls({
           {isPlaying ? 'Pause' : 'Start'}
         </button>
       )}
-      <button type="button" className="btn btn-ghost" style={{ minWidth: 72 }} onClick={onToggleDensity}>
-        {densityLabelFlash ?? 'QR'}
+      <button type="button" className="btn btn-ghost" style={{ minWidth: 88 }} onClick={onToggleDensity}>
+        {densityLabelFlash ?? (qrDensity === 'static' ? 'Dense' : 'Animated')}
       </button>
     </div>
   )

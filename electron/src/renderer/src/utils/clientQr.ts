@@ -2,6 +2,8 @@
  * Export QR: Dense + Animated packs are built locally in Electron main
  * (BC-UR + qrcode) — Sparrow-style, no Python round-trip.
  */
+import type { BuildTxResponse, QRDisplayDensity } from '@renderer/api/types'
+
 export type ExportQrPack = { frames: string[]; frameMs: number }
 
 export type LocalExportQrPacks = {
@@ -34,5 +36,42 @@ export async function localExportQrPacks(
   return {
     static: staticPack,
     animated: animatedPack ?? staticPack!,
+  }
+}
+
+export function canLocalExportQr(): boolean {
+  return Boolean(seedmaskApi()?.exportQrPacks)
+}
+
+/** Attach locally-encoded frames onto a build response that omitted PNG QR. */
+export function applyLocalQrPackToBuild(
+  res: BuildTxResponse,
+  packs: LocalExportQrPacks,
+  density: QRDisplayDensity,
+): BuildTxResponse {
+  const useStatic = density === 'static' && !!packs.static
+  const pack = useStatic ? packs.static! : packs.animated
+  return {
+    ...res,
+    qr_frames_base64: pack.frames,
+    qr_png_base64: pack.frames[0],
+    qr_frame_ms: pack.frameMs,
+    qr_fountain: pack.frames.length > 1,
+    qr_display_mode: useStatic ? 'static' : 'animated',
+  }
+}
+
+export function buildResponseForPack(
+  res: BuildTxResponse,
+  pack: ExportQrPack,
+  mode: QRDisplayDensity,
+): BuildTxResponse {
+  return {
+    ...res,
+    qr_frames_base64: pack.frames,
+    qr_png_base64: pack.frames[0],
+    qr_frame_ms: pack.frameMs,
+    qr_fountain: pack.frames.length > 1,
+    qr_display_mode: mode,
   }
 }

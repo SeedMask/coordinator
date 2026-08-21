@@ -63,6 +63,32 @@ export function isGroupPartiallySelected(group: UtxoAddressGroup, selected: Set<
   return any && !isGroupFullySelected(group, selected)
 }
 
+export function rowLooksUsed(row: {
+  used?: boolean
+  is_used?: boolean
+  balance_sompi?: number
+}): boolean {
+  return Boolean(row.is_used) || Boolean(row.used) || (row.balance_sompi ?? 0) > 0
+}
+
+/** First unused index in rows; falls back to book hint only when that row is unused. */
+export function firstUnusedAddressIndex(
+  rows: Array<{ index: number; used?: boolean; is_used?: boolean; balance_sompi?: number; address?: string }>,
+  bookIndex?: number,
+): { index: number; address: string } | null {
+  if (!rows.length) return null
+  if (bookIndex != null) {
+    const hinted = rows.find((r) => r.index === bookIndex)
+    if (hinted && !rowLooksUsed(hinted)) {
+      return { index: hinted.index, address: hinted.address ?? '' }
+    }
+  }
+  const unused = rows.find((r) => !rowLooksUsed(r))
+  if (unused) return { index: unused.index, address: unused.address ?? '' }
+  const last = rows[rows.length - 1]
+  return { index: last.index, address: last.address ?? '' }
+}
+
 export function mergeAddressBookWithUtxos(
   base: {
     receive: Array<{
@@ -87,6 +113,8 @@ export function mergeAddressBookWithUtxos(
     }>
     next_receive_index?: number
     next_receive_address?: string
+    next_change_index?: number
+    next_change_address?: string
   },
   utxos: UtxoDTO[],
   chain: 'kaspa' | 'bitcoin' = 'kaspa',
@@ -108,10 +136,18 @@ export function mergeAddressBookWithUtxos(
         used: sompi > 0 || Boolean(r.is_used) || Boolean(r.used),
       }
     })
+  const receive = overlay(base.receive)
+  const change = overlay(base.change)
+  const nextRecv = firstUnusedAddressIndex(receive, base.next_receive_index)
+  const nextChg = firstUnusedAddressIndex(change, base.next_change_index)
   return {
     ...base,
-    receive: overlay(base.receive),
-    change: overlay(base.change),
+    receive,
+    change,
+    next_receive_index: nextRecv?.index ?? base.next_receive_index,
+    next_receive_address: nextRecv?.address || base.next_receive_address,
+    next_change_index: nextChg?.index ?? base.next_change_index,
+    next_change_address: nextChg?.address || base.next_change_address,
   }
 }
 

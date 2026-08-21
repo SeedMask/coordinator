@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import type { DisplayCurrency } from '@renderer/api/types'
 import { groupUtxosByAddress, type UtxoAddressGroup } from '@renderer/utils/utxoHelpers'
-import { reviewAddressGroupsForSpentCoins } from '@renderer/utils/buildSummary'
 import { coinAmountLabel } from '@renderer/utils/sendAmount'
 import type { CoinChain, UtxoDTO } from '@renderer/api/types'
 import { coinUnit } from '@renderer/api/types'
@@ -282,30 +281,24 @@ export function AddressUtxoGroupRowView({
   )
 }
 
-export function reviewAddressGroupsForSidebar(
-  spentCoins: UtxoDTO[],
-  walletUtxos: UtxoDTO[],
-): UtxoAddressGroup[] {
-  return reviewAddressGroupsForSpentCoins(spentCoins, walletUtxos)
-}
-
 export function SelectedCoinsPanel({
   coins,
   unitSymbol,
   title = 'Selected UTXOs',
   subtitle,
-  walletUtxos,
+  totalAmountLabel,
+  totalFiatLabel,
 }: {
   coins: UtxoDTO[]
   unitSymbol: string
   title?: string
   subtitle?: string
-  /** When set (default send), show full address balance for each address used. */
-  walletUtxos?: UtxoDTO[]
+  /** Sum of coins actually used as inputs (not full address balances). */
+  totalAmountLabel?: string | null
+  totalFiatLabel?: string | null
 }): React.JSX.Element {
-  const displayGroups = walletUtxos?.length
-    ? reviewAddressGroupsForSidebar(coins, walletUtxos)
-    : groupUtxosByAddress(coins)
+  // Always group the spent inputs — not full address balances — so the total matches.
+  const displayGroups = groupUtxosByAddress(coins)
   const inputCount = coins.length
   const defaultSubtitle = `${inputCount} UTXO${inputCount === 1 ? '' : 's'} · one transaction`
 
@@ -328,6 +321,13 @@ export function SelectedCoinsPanel({
           )}
         </div>
       ))}
+      {totalAmountLabel ? (
+        <div className="selected-coins-total">
+          <span className="selected-coins-total-label">Total amount</span>
+          <span className="selected-coins-total-value mono-field">{totalAmountLabel}</span>
+          {totalFiatLabel ? <span className="muted selected-coins-total-fiat">{totalFiatLabel}</span> : null}
+        </div>
+      ) : null}
     </div>
   )
 }

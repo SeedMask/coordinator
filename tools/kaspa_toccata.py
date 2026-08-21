@@ -178,18 +178,33 @@ def utxo_entry_dict_from_wallet_utxo(utxo: Any, *, script_hex: str) -> dict[str,
 
 
 def _norm_script_hex(script_hex: str) -> str:
+    """Return bare script body bytes as hex for ScriptPublicKey.
+
+    Accepts Schnorr P2PK (`20` + 32-byte x-only + `ac`) and Kaspa P2SH
+    (`aa20` + 32-byte blake2b + `87`), including common wire-prefixed forms.
+    """
     h = (script_hex or "").strip().lower()
     if h.startswith("0x"):
         h = h[2:]
+    # Wire form: 2-byte version prefix + script body (PSKT / some RPC dumps).
     if len(h) >= 72 and h[4:6] == "20" and h.endswith("ac"):
         body = h[4:]
         if len(body) == 68:
             return body
-    if len(h) == 64 and not h.startswith("20"):
+    if len(h) >= 74 and h[4:8] == "aa20" and h.endswith("87"):
+        body = h[4:]
+        if len(body) == 70:
+            return body
+    if len(h) == 64 and not h.startswith("20") and not h.startswith("aa"):
         return "20" + h + "ac"
     if len(h) == 68 and h.startswith("20") and h.endswith("ac"):
         return h
-    raise ValueError(f"script_hex does not look like Schnorr P2PK ({len(h)} hex chars)")
+    # Kaspa multisig change / receive: OP_BLAKE2B OP_DATA_32 <hash> OP_EQUAL
+    if len(h) == 70 and h.startswith("aa20") and h.endswith("87"):
+        return h
+    raise ValueError(
+        f"script_hex does not look like Schnorr P2PK or P2SH ({len(h)} hex chars)"
+    )
 
 
 def _spk_from_hex(script_hex: str, version: int = 0):

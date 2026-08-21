@@ -86,7 +86,11 @@ export function periodSummaryTitle(period: AssetHistoryPeriod): string {
 export function eventDate(tx: WalletTxDTO): Date | null {
   const t = txBlockTime(tx)
   if (t > 0) return new Date(t * 1000)
-  return null
+  // UTXO gap-fills / pending rows often arrive with block_time=0. Still place them
+  // on the Asset History tip so the chart matches the dashboard tx count.
+  const id = (tx.transaction_id || tx.txid || tx.id || '').trim()
+  if (!id) return null
+  return new Date()
 }
 
 /** On-chain txs in the selected period — same dedupe rules as the dashboard list. */

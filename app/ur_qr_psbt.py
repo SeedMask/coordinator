@@ -85,7 +85,13 @@ def fountain_qr_frames_base64_psbt(
         unique_parts = len(parts)
     modules = _qr_modules_for_uri(parts[0]) if parts else 0
     bs = STATIC_QR_BOX_SIZE if static else box_size
-    frames = [qr_png_base64_for_part(p, box_size=bs) for p in parts]
+    if len(parts) <= 1:
+        frames = [qr_png_base64_for_part(p, box_size=bs) for p in parts]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(8, len(parts))) as pool:
+            frames = list(pool.map(lambda p: qr_png_base64_for_part(p, box_size=bs), parts))
     display_px = (modules * bs + 8 * bs) if modules else 320
     return {
         "qr_frames_base64": frames,

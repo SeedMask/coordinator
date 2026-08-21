@@ -235,6 +235,8 @@ export interface AddressBookResponse {
   change: AddressRowDTO[]
   next_receive_index?: number
   next_receive_address?: string
+  next_change_index?: number
+  next_change_address?: string
 }
 
 export interface AddressRowDTO {
@@ -366,6 +368,8 @@ export interface BuildTxResponse {
   qr_modules_per_frame?: number
   qr_display_mode?: string
   qr_fountain?: boolean
+  /** Compact unsigned / PSBT text for local QR encode when frames are omitted. */
+  qr_payload_text?: string
   summary?: Record<string, unknown>
   unsigned?: Record<string, unknown>
   error?: string

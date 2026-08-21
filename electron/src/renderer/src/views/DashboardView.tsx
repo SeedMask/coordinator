@@ -76,8 +76,8 @@ export function DashboardView(): React.JSX.Element {
 
   useEffect(() => {
     if (!activeWallet) return
-    void loadTransactions(txSearch.trim() || undefined)
-  }, [activeWallet?.id, selectedChain, txSearch])
+    void loadTransactions()
+  }, [activeWallet?.id, selectedChain, loadTransactions])
 
   useEffect(() => {
     if (!activeWallet) return
@@ -113,12 +113,34 @@ export function DashboardView(): React.JSX.Element {
     setShowAllTxs(false)
   }, [activeWallet?.id, selectedChain, txSearch])
 
-  const txPageCount = Math.max(1, Math.ceil(transactions.length / TX_PAGE_SIZE))
+  const filteredTransactions = useMemo(() => {
+    const needle = txSearch.trim().toLowerCase()
+    if (!needle) return transactions
+    return transactions.filter((tx) => {
+      const hay = [
+        tx.transaction_id,
+        tx.txid,
+        tx.id,
+        tx.counterparty,
+        tx.direction,
+        tx.label,
+        tx.amount_kas,
+        tx.amount_btc,
+        tx.amount_sompi,
+        tx.amount_sats,
+      ]
+        .map((v) => String(v ?? '').toLowerCase())
+        .join(' ')
+      return hay.includes(needle)
+    })
+  }, [transactions, txSearch])
+
+  const txPageCount = Math.max(1, Math.ceil(filteredTransactions.length / TX_PAGE_SIZE))
   const pagedTransactions = useMemo(() => {
-    if (showAllTxs) return transactions
+    if (showAllTxs) return filteredTransactions
     const start = (txPage - 1) * TX_PAGE_SIZE
-    return transactions.slice(start, start + TX_PAGE_SIZE)
-  }, [showAllTxs, transactions, txPage])
+    return filteredTransactions.slice(start, start + TX_PAGE_SIZE)
+  }, [showAllTxs, filteredTransactions, txPage])
 
   useEffect(() => {
     if (txPage > txPageCount) setTxPage(txPageCount)
@@ -237,8 +259,12 @@ export function DashboardView(): React.JSX.Element {
       <AssetHistoryChart />
 
       <section className="dashboard-transactions">
-        <h3 className="section-title">Transactions</h3>
-        <p className="muted">On-chain sends and receives for this wallet.</p>
+        <div className="dashboard-transactions-header">
+          <h3 className="section-title">Transactions</h3>
+          <p className="muted dashboard-transactions-subtitle">
+            On-chain sends and receives for this wallet.
+          </p>
+        </div>
         <div className="row" style={{ marginBottom: 12 }}>
           <input
             className="field-input"
@@ -255,22 +281,24 @@ export function DashboardView(): React.JSX.Element {
 
         {transactions.length === 0 ? (
           <p className="muted">No transactions yet.</p>
+        ) : filteredTransactions.length === 0 ? (
+          <p className="muted">No transactions match “{txSearch.trim()}”.</p>
         ) : (
           <>
             <p className="muted tx-count-label">
               {showAllTxs
-                ? `${transactions.length} on-chain transactions`
-                : `Showing ${(txPage - 1) * TX_PAGE_SIZE + 1}–${Math.min(txPage * TX_PAGE_SIZE, transactions.length)} of ${transactions.length}`}
+                ? `${filteredTransactions.length} on-chain transaction${filteredTransactions.length === 1 ? '' : 's'}${txSearch.trim() ? ' matching search' : ''}`
+                : `Showing ${(txPage - 1) * TX_PAGE_SIZE + 1}–${Math.min(txPage * TX_PAGE_SIZE, filteredTransactions.length)} of ${filteredTransactions.length}${txSearch.trim() ? ' matching search' : ''}`}
             </p>
             <div className="tx-list">
               {pagedTransactions.map((tx, index) => (
                 <div key={txId(tx) || `${txPage}-${index}`}>
                   {index > 0 && <hr className="tx-divider" />}
-                  <TransactionRow tx={tx} onOpenDetails={setDetailTx} />
+                  <TransactionRow tx={tx} onOpenDetails={setDetailTx} searchQuery={txSearch} />
                 </div>
               ))}
             </div>
-            {transactions.length > TX_PAGE_SIZE && (
+            {filteredTransactions.length > TX_PAGE_SIZE && (
               <div className="tx-pagination" role="navigation" aria-label="Transaction pages">
                 {!showAllTxs &&
                   Array.from({ length: txPageCount }, (_, i) => i + 1).map((page) => (

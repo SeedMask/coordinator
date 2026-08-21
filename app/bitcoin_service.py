@@ -531,6 +531,9 @@ class BitcoinService:
     def receive_address_at(self, cfg: WalletConfig, index: int) -> str:
         return self._address_at(cfg, 0, index)
 
+    def change_address_at(self, cfg: WalletConfig, index: int) -> str:
+        return self._address_at(cfg, 1, index)
+
     def _receive_scan_max(self, cfg: WalletConfig) -> int:
         from .address_usage import load_receive_usage
 
@@ -680,11 +683,17 @@ class BitcoinService:
         apply_receive_usage_to_rows(change, change_usage)
         next_idx = first_unused_receive_index(set(usage.keys()), cfg.scan_limit)
         next_addr = self.receive_address_at(cfg, next_idx)
+        from .address_usage import first_unused_change_index
+
+        next_chg_idx = first_unused_change_index(set(change_usage.keys()), cfg.scan_limit)
+        next_chg_addr = self.change_address_at(cfg, next_chg_idx)
         return {
             "receive": receive,
             "change": change,
             "next_receive_index": next_idx,
             "next_receive_address": next_addr,
+            "next_change_index": next_chg_idx,
+            "next_change_address": next_chg_addr,
         }
 
     async def fetch_utxos(self, cfg: WalletConfig, on_progress=None) -> BitcoinScanResult:

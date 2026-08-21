@@ -217,6 +217,19 @@ export class APIClient {
     return this.get(`/api/tx/draft/${draftId}${q}`)
   }
 
+  /** Regenerate signing QR for an existing draft (animated ↔ dense) without rebuilding the tx. */
+  async draftQr(
+    draftId: string,
+    qrDisplayMode: QRDisplayDensity = 'animated',
+    index = 0,
+  ): Promise<BuildTxResponse> {
+    return this.post(
+      `/api/tx/draft/${encodeURIComponent(draftId)}/sweep-qr`,
+      { index, qr_display_mode: qrDisplayMode },
+      120_000,
+    )
+  }
+
   async draftVisualize(draftId: string, walletId?: string): Promise<TxVisualizeResponse> {
     const q = walletId ? `?wallet_id=${encodeURIComponent(walletId)}` : ''
     return this.get(`/api/tx/draft/${draftId}/visualize${q}`)
@@ -310,6 +323,8 @@ export class APIClient {
     feeSompi: number
     walletId?: string
     qrDisplayMode?: QRDisplayDensity
+    /** When false, backend skips PNG QR (use qr_payload_text + local encode). */
+    includeQr?: boolean
     rbf?: boolean
     useGenerator?: boolean
     utxos?: UtxoDTO[]
@@ -326,6 +341,7 @@ export class APIClient {
       rbf: params.rbf ?? false,
       use_generator: (params.useGenerator ?? false) || keys.length > 1,
       custom_fee: params.customFee ?? false,
+      include_qr: params.includeQr ?? true,
     }
     if (snapshots) {
       body.utxos = snapshots
@@ -501,10 +517,16 @@ export class APIClient {
     }
   }
 
-  async refreshWatch(walletId: string): Promise<BalanceResponse> {
+  async refreshWatch(walletId: string, extraAddresses?: string[]): Promise<BalanceResponse> {
+    const addresses = (extraAddresses ?? []).map((a) => a.trim()).filter(Boolean)
     const raw = await this.request<Record<string, unknown>>(
       `/api/wallets/${walletId}/refresh/watch`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', timeoutMs: 30_000 },
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ addresses }),
+        timeoutMs: 45_000,
+      },
     )
     return parseBalanceResponse(raw)
   }

@@ -185,6 +185,8 @@ class BuildTxIn(BaseModel):
     fee_sompi: int | None = None
     wallet_id: str | None = None
     qr_display_mode: str | None = None
+    # When False, skip PNG QR encode (Mac builds QR locally from qr_payload_text).
+    include_qr: bool = True
     rbf: bool = False
     use_generator: bool = False
     feerate_sat_vb: float | None = None
@@ -260,6 +262,12 @@ class FeeEstimateIn(BaseModel):
     refine_max: bool = False
     priority_fee_sompi: int | None = None
     requested_fee_sompi: int | None = None
+
+
+class WatchRefreshIn(BaseModel):
+    """Optional addresses that must be included in a hot balance refresh (e.g. just-sent outputs)."""
+
+    addresses: list[str] = Field(default_factory=list)
 
 
 class FinishIn(BaseModel):
@@ -911,16 +919,22 @@ async def refresh_wallet_discover_stream(wallet_id: str):
 
 
 @app.post("/api/wallets/{wallet_id}/refresh/watch")
-async def refresh_wallet_watch(wallet_id: str):
+async def refresh_wallet_watch(wallet_id: str, body: WatchRefreshIn | None = None):
     _resolve_unlocked_wallet_id(wallet_id)
     cfg = get_wallet(wallet_id)
     from .wallet_store import resolved_wallet_coin
 
     coin = resolved_wallet_coin(cfg) if cfg else "unknown"
+    extras = [str(a).strip() for a in (body.addresses if body else []) if str(a).strip()]
     try:
-        data = await _sync_worker.enqueue(wallet_id, "hot", wait=True)
-        if not data:
-            data = await _coordinator.refresh_watch(wallet_id=wallet_id)
+        # When the UI names specific post-send addresses, refresh them directly so
+        # self-sends to older "Used" receives are not missed by a queued hot job.
+        if extras:
+            data = await _coordinator.refresh_watch(wallet_id=wallet_id, extra_addresses=extras)
+        else:
+            data = await _sync_worker.enqueue(wallet_id, "hot", wait=True)
+            if not data:
+                data = await _coordinator.refresh_watch(wallet_id=wallet_id)
         return {
             **data,
             "address_count": cfg.scan_limit if cfg else 0,
@@ -1239,6 +1253,7 @@ async def wallet_transactions(wallet_id: str, q: str | None = None, refresh: boo
         dicts,
         _wallet_utxos_from_cache(wallet_id),
         coin=resolved_wallet_coin(cfg),
+        wallet_id=wallet_id,
     )
     dicts = _dedupe_tx_dicts(dicts)
     receive_pairs, change_pairs = bounded_address_pairs(
@@ -1901,6 +1916,28 @@ async def tx_build(body: BuildTxIn):
             )
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
+        from .bitcoin_psbt import psbt_to_base64
+
+        qr_payload_text = psbt_to_base64(psbt_bytes)
+        out = {
+            "draft_id": draft_id,
+            "unsigned": summary,
+            "coin": "bitcoin",
+            "summary": summary,
+            "qr_payload_text": qr_payload_text,
+        }
+        if not body.include_qr:
+            return {
+                **out,
+                "qr_frames_base64": [],
+                "qr_frame_count": 0,
+                "qr_unique_parts": 0,
+                "qr_frame_ms": 0,
+                "qr_stepped": False,
+                "qr_fountain": False,
+                "qr_display_mode": body.qr_display_mode or "animated",
+                "qr_png_base64": "",
+            }
         try:
             qr_pack = await asyncio.to_thread(
                 fountain_qr_frames_base64_psbt,
@@ -1908,17 +1945,11 @@ async def tx_build(body: BuildTxIn):
             )
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
-        return {
-            "draft_id": draft_id,
-            "unsigned": summary,
-            "coin": "bitcoin",
-            **qr_pack,
-            "summary": summary,
-        }
+        return {**out, **qr_pack}
 
     # Kaspa: generator computes mass-based fee; custom_fee uses per-subset priority search.
     from .kaspa_generator import kip9_send_neighbors, resolve_kaspa_send_sompi
-    from .tx_pipeline import save_draft_from_build_kaspa_generator
+    from .tx_pipeline import save_draft_from_build_kaspa_generator, unsigned_json_for_qr
     from .ur_qr import fountain_qr_frames_base64
 
     custom_fee = bool(body.custom_fee)
@@ -1999,18 +2030,35 @@ async def tx_build(body: BuildTxIn):
     except Exception as e:
         raise HTTPException(400, f"Could not build Kaspa transaction: {e}") from e
     try:
+        qr_payload_text = unsigned_json_for_qr(unsigned)
+    except Exception:
+        qr_payload_text = ""
+    out = {
+        "draft_id": draft_id,
+        "unsigned": unsigned,
+        "summary": summary,
+        "qr_payload_text": qr_payload_text,
+    }
+    if not body.include_qr:
+        return {
+            **out,
+            "qr_frames_base64": [],
+            "qr_frame_count": 0,
+            "qr_unique_parts": 0,
+            "qr_frame_ms": 0,
+            "qr_stepped": False,
+            "qr_fountain": False,
+            "qr_display_mode": body.qr_display_mode or "animated",
+            "qr_png_base64": "",
+        }
+    try:
         qr_pack = await asyncio.to_thread(
             fountain_qr_frames_base64,
             unsigned, qr_display_mode=body.qr_display_mode or "animated"
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
-    return {
-        "draft_id": draft_id,
-        "unsigned": unsigned,
-        **qr_pack,
-        "summary": summary,
-    }
+    return {**out, **qr_pack}
 
 
 @app.post("/api/tx/build-sweep")
@@ -2194,13 +2242,15 @@ async def get_draft_export(draft_id: str, wallet_id: str | None = None):
                 try:
                     from kaspa_pskt import pskt_to_seedmask_v2
 
+                    prior_hash = str(unsigned.get("draft_hash") or "").strip()
+                    prior_file = str(unsigned.get("_file_draft_hash") or "").strip()
+                    prior_accepted = unsigned.get("_accepted_draft_hashes")
                     rebuilt = pskt_to_seedmask_v2(
                         pskt,
                         kpub=(cfg.kpub or "").strip(),
                         account=effective_wallet_account(cfg),
                     )
-                    if unsigned.get("draft_hash"):
-                        rebuilt["draft_hash"] = unsigned["draft_hash"]
+                    # Do NOT copy a stale draft_hash onto a rebuilt body — rehash below.
                     # Preserve UI/address metadata that is not always recoverable from PSKT script hex.
                     for idx, src in enumerate(unsigned.get("inputs") or []):
                         if idx < len(rebuilt.get("inputs") or []) and isinstance(src, dict):
@@ -2212,11 +2262,27 @@ async def get_draft_export(draft_id: str, wallet_id: str | None = None):
                             dst = rebuilt["outputs"][idx]
                             if src.get("kaspa_address"):
                                 dst["kaspa_address"] = src["kaspa_address"]
+                            if src.get("is_change") is not None:
+                                dst["is_change"] = src["is_change"]
+                            if src.get("change_address_index") is not None:
+                                dst["change_address_index"] = src["change_address_index"]
                     unsigned = rebuilt
+                    # SeedMask may still echo the pre-rebuild file stamp when signing that file.
+                    if prior_file:
+                        unsigned["_file_draft_hash"] = prior_file
+                    elif prior_hash:
+                        unsigned["_file_draft_hash"] = prior_hash
+                    if isinstance(prior_accepted, list):
+                        unsigned["_accepted_draft_hashes"] = list(prior_accepted)
                 except Exception:
                     # Keep legacy export behavior if an old draft cannot be rebuilt from PSKT.
                     pass
             unsigned = enrich_kaspa_multisig_unsigned(unsigned, cfg)
+    # Always re-stamp so Save / SD load round-trip matches Coordinator draft_hash.
+    from .tx_pipeline import attach_unsigned_draft_hash, remember_file_draft_hash
+
+    remember_file_draft_hash(unsigned)
+    attach_unsigned_draft_hash(unsigned)
     pskb_hex = None
     pskt_count = 1 if pskt else 0
     try:
@@ -2287,6 +2353,7 @@ async def tx_import(body: ImportTxIn):
         import_pskt_hex,
         is_bitcoin_draft,
         parse_draft_file,
+        remember_file_draft_hash,
         strip_ready_to_unsigned,
     )
 
@@ -2358,8 +2425,8 @@ async def tx_import(body: ImportTxIn):
         ready = copy.deepcopy(ready_candidate)
         draft_unsigned = strip_ready_to_unsigned(ready)
         ready["draft_hash"] = draft_unsigned.get("draft_hash")
-        draft_id = save_draft(draft_unsigned, pskt=None)
-        summary = _summary_from_unsigned(draft_unsigned)
+        summary = _merge_import_summary(body.unsigned, draft_unsigned)
+        draft_id = save_draft(draft_unsigned, pskt=None, summary=summary)
         return {
             "draft_id": draft_id,
             "unsigned": draft_unsigned,
@@ -2441,8 +2508,10 @@ async def tx_import(body: ImportTxIn):
         body.unsigned.get("pskt"), dict
     ):
         pskt = body.unsigned["pskt"]
+    remember_file_draft_hash(unsigned)
     attach_unsigned_draft_hash(unsigned)
-    draft_id = save_draft(unsigned, pskt=pskt)
+    summary = _merge_import_summary(body.unsigned, unsigned)
+    draft_id = save_draft(unsigned, pskt=pskt, summary=summary)
     from .ur_qr import fountain_qr_frames_base64
 
     try:
@@ -2460,7 +2529,7 @@ async def tx_import(body: ImportTxIn):
         "draft_id": draft_id,
         "unsigned": unsigned,
         **qr_pack,
-        "summary": _summary_from_unsigned(unsigned),
+        "summary": summary,
         "signatures_loaded": have,
         "signatures_required": need,
         "signing_complete": False,
@@ -2542,11 +2611,27 @@ def _output_sompi(out: dict) -> int:
 
 
 def _summary_from_unsigned(unsigned: dict) -> dict:
+    """Rebuild a Review summary from an unsigned Kaspa v2 body (incl. change outputs)."""
     inputs = unsigned.get("inputs") or []
     inp = inputs[0] if inputs else {}
-    outs = unsigned.get("outputs") or []
-    pay = outs[0] if outs else {}
-    send = _output_sompi(pay)
+    outs = [o for o in (unsigned.get("outputs") or []) if isinstance(o, dict)]
+
+    change_outs: list[dict] = []
+    pay_outs: list[dict] = []
+    for o in outs:
+        if o.get("is_change") or o.get("change_address_index") is not None:
+            change_outs.append(o)
+        else:
+            pay_outs.append(o)
+    # SeedMask/Coordinator builder convention: output[0]=payment, output[1+]=change.
+    if not change_outs and len(outs) >= 2:
+        pay_outs = [outs[0]]
+        change_outs = outs[1:]
+    elif not pay_outs and outs:
+        pay_outs = [outs[0]]
+
+    pay = pay_outs[0] if pay_outs else {}
+    send = sum(_output_sompi(o) for o in pay_outs) if pay_outs else _output_sompi(pay)
     total_in = sum(
         int(i.get("utxo_amount") or i.get("amount_sompi") or i.get("amount") or 0)
         for i in inputs
@@ -2554,15 +2639,64 @@ def _summary_from_unsigned(unsigned: dict) -> dict:
     )
     if not total_in:
         total_in = int(inp.get("utxo_amount") or inp.get("amount_sompi") or inp.get("amount") or 0)
-    out_sum = sum(_output_sompi(o) for o in outs if isinstance(o, dict))
+    out_sum = sum(_output_sompi(o) for o in outs)
     fee = max(0, total_in - out_sum) if total_in else 0
-    return {
+
+    change_sompi = sum(_output_sompi(o) for o in change_outs)
+    change_addr = ""
+    change_idx = None
+    if change_outs:
+        ch0 = change_outs[0]
+        change_addr = str(ch0.get("kaspa_address") or ch0.get("to_address") or ch0.get("address") or "")
+        raw_idx = ch0.get("change_address_index")
+        if raw_idx is None:
+            raw_idx = ch0.get("address_index")
+        try:
+            change_idx = int(raw_idx) if raw_idx is not None else None
+        except (TypeError, ValueError):
+            change_idx = None
+
+    summary: dict = {
         "send_kas": send / SOMPI_PER_KAS,
+        "send_sompi": send,
         "fee_sompi": fee,
-        "to_address": str(pay.get("kaspa_address") or pay.get("to_address") or ""),
+        "to_address": str(pay.get("kaspa_address") or pay.get("to_address") or pay.get("address") or ""),
         "from_address": str(inp.get("receive_address") or ""),
         "input_count": len(inputs) if inputs else 1,
+        "input_total_sompi": total_in,
+        "input_total_kas": total_in / SOMPI_PER_KAS if total_in else 0,
     }
+    if change_sompi > 0:
+        summary["change_sompi"] = change_sompi
+        summary["change_kas"] = change_sompi / SOMPI_PER_KAS
+        if change_addr:
+            summary["change_address"] = change_addr
+        if change_idx is not None and change_idx >= 0:
+            summary["change_address_index"] = change_idx
+    return summary
+
+
+def _merge_import_summary(envelope: dict | None, unsigned: dict) -> dict:
+    """Prefer a saved envelope summary, always fill change/fees from the unsigned body."""
+    built = _summary_from_unsigned(unsigned)
+    saved = None
+    if isinstance(envelope, dict) and isinstance(envelope.get("summary"), dict):
+        saved = envelope["summary"]
+    if not saved:
+        return built
+    out = {**built, **saved}
+    # Never let a thin save wipe change that still exists on the unsigned outputs.
+    if float(out.get("change_sompi") or out.get("change_kas") or 0) <= 0 and float(
+        built.get("change_sompi") or 0
+    ) > 0:
+        for k in ("change_sompi", "change_kas", "change_address", "change_address_index"):
+            if built.get(k) is not None:
+                out[k] = built[k]
+    if float(out.get("fee_sompi") or 0) <= 0 and float(built.get("fee_sompi") or 0) > 0:
+        out["fee_sompi"] = built["fee_sompi"]
+    if not str(out.get("to_address") or "").strip() and built.get("to_address"):
+        out["to_address"] = built["to_address"]
+    return out
 
 
 @app.post("/api/tx/broadcast")
@@ -2613,10 +2747,21 @@ async def tx_broadcast(body: FinishIn):
             )
         except Exception:
             pass
+        touch = [
+            str(summary.get("to_address") or "").strip(),
+            str(summary.get("change_address") or "").strip(),
+        ]
+        touch = [a for a in touch if a]
         try:
-            await _wallet_watcher.nudge_wallet(wid)
+            if touch:
+                await _coordinator.refresh_watch(wallet_id=wid, extra_addresses=touch)
+            else:
+                await _wallet_watcher.nudge_wallet(wid)
         except Exception:
-            pass
+            try:
+                await _wallet_watcher.nudge_wallet(wid)
+            except Exception:
+                pass
     except FileNotFoundError as e:
         raise HTTPException(404, str(e)) from e
     except Exception as e:

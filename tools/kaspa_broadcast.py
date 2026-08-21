@@ -39,7 +39,7 @@ def wrap_schnorr_signature_script(sig_hex: str) -> bytes:
 
 
 def normalize_script_hex(script_hex: str) -> str:
-    """Return bare P2PK script body (68 hex: 20 + x-only + ac). Fixes explorer 32-byte x-only mistakes."""
+    """Return bare script body (P2PK or P2SH). Fixes explorer 32-byte x-only mistakes."""
     h = script_hex.strip().lower()
     if h.startswith("0x"):
         h = h[2:]
@@ -47,7 +47,11 @@ def normalize_script_hex(script_hex: str) -> str:
         body = h[4:]
         if len(body) == 68:
             return body
-    if len(h) == 64 and not h.startswith("20"):
+    if len(h) >= 74 and h[4:8] == "aa20" and h.endswith("87"):
+        body = h[4:]
+        if len(body) == 70:
+            return body
+    if len(h) == 64 and not h.startswith("20") and not h.startswith("aa"):
         print(
             "Warning: script_hex is 32-byte x-only only; wrapping as Schnorr P2PK (20…ac). "
             "Prefer --receive-address / --to-address when building the unsigned QR.",
@@ -56,9 +60,11 @@ def normalize_script_hex(script_hex: str) -> str:
         return "20" + h + "ac"
     if len(h) == 68 and h.startswith("20") and h.endswith("ac"):
         return h
+    if len(h) == 70 and h.startswith("aa20") and h.endswith("87"):
+        return h
     raise SystemExit(
-        f"script_hex length {len(h)} does not look like Schnorr P2PK "
-        "(want 68 hex: 20 + 32-byte x + ac, or 64 hex x-only)"
+        f"script_hex length {len(h)} does not look like Schnorr P2PK or P2SH "
+        "(want 68 hex P2PK: 20 + 32-byte x + ac, 70 hex P2SH: aa20 + hash + 87, or 64 hex x-only)"
     )
 
 

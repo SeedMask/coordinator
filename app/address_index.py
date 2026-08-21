@@ -11,7 +11,9 @@ from .wallet_store import DATA_DIR, WalletConfig
 _INDEX_DIR = DATA_DIR / "address_index"
 _HOT_RECEIVE_AHEAD = 6
 _HOT_CHANGE_CAP = 12
-_HOT_MAX_ADDRESSES = 28
+# Must cover Scan depth + change window. A fixed 28-cap alphabetically truncated
+# used receive addresses (e.g. Receive #4) so self-sends never reappeared in balance.
+_HOT_MAX_ADDRESSES = 128
 
 
 def _path(wallet_id: str) -> Path:
@@ -171,8 +173,14 @@ def hot_addresses_for_wallet(
         from .kaspa_service import get_service
 
         svc = get_service()
-        # Probe past Scan depth so payments to higher receive indices still refresh.
-        kaspa_tail = min(100, max(cfg.scan_limit, next_idx + _HOT_RECEIVE_AHEAD, 20))
+        # Always cover Scan depth + used receive indices (even empty/"Used") so a
+        # payment back to an old receive address is picked up on hot refresh.
+        used_hi = max(usage.keys()) if usage else -1
+        index_recv_hi = max(index.get("receive_indices") or [-1])
+        kaspa_tail = min(
+            100,
+            max(cfg.scan_limit, next_idx + _HOT_RECEIVE_AHEAD, used_hi + 1, index_recv_hi + 1, 20),
+        )
         for i, addr in svc.receive_addresses(cfg, count=kaspa_tail):
             addrs.add(addr)
         for i, addr in svc.change_addresses(cfg, count=min(max(cfg.scan_limit, 12), _HOT_CHANGE_CAP)):
@@ -180,8 +188,16 @@ def hot_addresses_for_wallet(
 
     ordered = sorted(addrs)
     if len(ordered) > _HOT_MAX_ADDRESSES:
+        # Prefer: live UTXO addrs, then indexed, then the rest — never drop by
+        # alphabetical luck alone (that hid funded Used receives).
+        live = {
+            str(raw.get("address") or "").strip()
+            for raw in (utxo_dicts or [])
+            if str(raw.get("address") or "").strip()
+        }
         indexed = set(index.get("addresses") or [])
-        priority = [a for a in ordered if a in indexed]
-        tail = [a for a in ordered if a not in indexed]
-        ordered = (priority + tail)[:_HOT_MAX_ADDRESSES]
+        priority = [a for a in ordered if a in live]
+        mid = [a for a in ordered if a in indexed and a not in live]
+        tail = [a for a in ordered if a not in live and a not in indexed]
+        ordered = (priority + mid + tail)[:_HOT_MAX_ADDRESSES]
     return ordered

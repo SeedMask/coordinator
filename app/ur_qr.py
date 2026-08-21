@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import io
+from concurrent.futures import ThreadPoolExecutor
 
 import qrcode
 
@@ -20,8 +21,9 @@ DEFAULT_MAX_FRAGMENT_LEN = 50
 TARGET_QR_MODULES = 101
 MAX_QR_MODULES_SINGLE = 41
 # Static single QR: full payload in one symbol (SeedMask uses zoom + violent decode once seen).
-STATIC_MAX_QR_MODULES = 129
-STATIC_MAX_URI_CHARS = 2800
+# QR v40 = 177 modules. Old 129 (v28) rejected almost every real Kaspa unsigned tx (≥137).
+STATIC_MAX_QR_MODULES = 177
+STATIC_MAX_URI_CHARS = 3200
 # Animated multipart: Mac UI auto-cycles unique parts (Start/Pause below QR).
 DEFAULT_FRAME_MS = 900
 # Each frame visible long enough for SeedMask handoff (~400ms) before violent snap of next part.
@@ -31,8 +33,35 @@ DEFAULT_QR_BOX_SIZE = 16
 # Dense (static) single QR: larger modules on Mac + fullscreen tap target.
 STATIC_QR_BOX_SIZE = 20
 MAX_URI_CHARS_PER_PART = 900
-# Larger fragments → fewer parts (multi-input Kaspa txs need >125 B fragments to stay ≤16 parts).
-_FRAGMENT_CANDIDATES = tuple(range(25, 805, 5))
+# Sparse fragment sizes — dense range(25,805,5) made pick_fragment_len take ~6s per build.
+# Coarser list stays ≤16 parts and near TARGET_QR_MODULES without hundreds of QR trials.
+_FRAGMENT_CANDIDATES = (
+    25,
+    30,
+    35,
+    40,
+    45,
+    50,
+    55,
+    60,
+    70,
+    80,
+    90,
+    100,
+    120,
+    150,
+    180,
+    200,
+    250,
+    300,
+    350,
+    400,
+    450,
+    500,
+    600,
+    700,
+    800,
+)
 
 
 def _cbor_bytes_payload(data: bytes) -> list[int]:
@@ -302,7 +331,8 @@ def fountain_qr_frames_base64_text(
         try:
             _encode_static()
         except ValueError:
-            _encode_animated()
+            # Do not silently return multipart and call it static — caller asked for dense.
+            raise
     else:
         try:
             _encode_animated()
@@ -311,7 +341,11 @@ def fountain_qr_frames_base64_text(
 
     modules = _qr_modules_for_uri(parts[0]) if parts else 0
     bs = STATIC_QR_BOX_SIZE if static else box_size
-    frames = [qr_png_base64_for_part(p, box_size=bs) for p in parts]
+    if len(parts) <= 1:
+        frames = [qr_png_base64_for_part(p, box_size=bs) for p in parts]
+    else:
+        with ThreadPoolExecutor(max_workers=min(8, len(parts))) as pool:
+            frames = list(pool.map(lambda p: qr_png_base64_for_part(p, box_size=bs), parts))
     display_px = (modules * bs + 8 * bs) if modules else 320
     return {
         "qr_frames_base64": frames,

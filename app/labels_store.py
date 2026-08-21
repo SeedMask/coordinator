@@ -99,7 +99,17 @@ def search_transactions(rows: list[dict], query: str) -> list[dict]:
     for row in rows:
         hay = " ".join(
             str(row.get(k) or "")
-            for k in ("transaction_id", "counterparty", "direction", "label")
+            for k in (
+                "transaction_id",
+                "txid",
+                "counterparty",
+                "direction",
+                "label",
+                "amount_kas",
+                "amount_btc",
+                "amount_sompi",
+                "amount_sats",
+            )
         ).lower()
         if q in hay:
             out.append(row)

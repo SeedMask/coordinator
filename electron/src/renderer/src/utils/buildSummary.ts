@@ -116,10 +116,16 @@ export function reviewWalletRemainderNote(
   summary: BuildSummary,
   totalSelectedKas: number,
   unit: string,
+  walletBalanceKas?: number,
 ): string | null {
-  const unused = reviewUnusedSelectedKas(summary, totalSelectedKas)
-  if (unused <= 0.00000001) return null
-  return `This send doesn't need every selected deposit. ${unused.toFixed(8)} ${unit} stays in your wallet and is not spent in this transaction.`
+  const used = reviewInputTotalKas(summary, totalSelectedKas)
+  if (used <= 0) return null
+  const outOf =
+    walletBalanceKas != null && walletBalanceKas > 0 ? walletBalanceKas : totalSelectedKas
+  if (outOf <= 0) return null
+  // Only show when this send uses less than the full wallet / selection.
+  if (used >= outOf - 0.00000001) return null
+  return `Out of your ${outOf.toFixed(8)} ${unit}, this transaction uses ${used.toFixed(8)} ${unit}.`
 }
 
 export function reviewFeeNote(summary: BuildSummary, actualFeeSompi: number, unit: string): string | null {

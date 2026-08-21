@@ -1318,6 +1318,10 @@ table.data-table td {
   width: 100%;
 }
 
+.send-wizard.send-wizard-review {
+  max-width: min(1400px, 100%);
+}
+
 .send-wizard-top {
   display: flex;
   align-items: center;
@@ -1504,12 +1508,12 @@ table.data-table td {
 
 .send-wizard-footer {
   display: flex;
+  justify-content: flex-end;
   align-items: center;
   gap: 12px;
   margin-top: auto;
-  padding: 14px 20px;
-  border-top: 1px solid var(--border);
-  background: var(--elevated);
+  padding: 10px 20px 14px;
+  background: transparent;
 }
 
 .send-broadcast-done {
@@ -1555,7 +1559,11 @@ table.data-table td {
 }
 
 .send-footer-primary {
-  min-width: 240px;
+  min-width: 180px;
+  padding: 14px 36px;
+  font-size: 16px;
+  font-weight: 650;
+  border-radius: 10px;
 }
 
 .send-footer-new {
@@ -1570,12 +1578,24 @@ table.data-table td {
 
 .send-review-layout {
   display: flex;
-  gap: 20px;
+  gap: 24px;
+  align-items: flex-start;
 }
 
 .send-review-layout.with-sidebar .send-review-coins {
-  width: 280px;
+  width: 240px;
   flex-shrink: 0;
+}
+
+.send-review-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.send-review-broadcast-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
 }
 
 .send-review-coin-row {
@@ -2241,6 +2261,30 @@ table.data-table td {
   gap: 10px;
   align-items: flex-start;
   margin-bottom: 4px;
+}
+
+.selected-coins-total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.selected-coins-total-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.selected-coins-total-value {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.selected-coins-total-fiat {
+  font-size: 12px;
 }
 
 .selected-coins-utxo-idx {
@@ -3291,6 +3335,23 @@ table.data-table td {
   padding-top: 8px;
 }
 
+.dashboard-transactions-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px 14px;
+  margin-bottom: 12px;
+}
+
+.dashboard-transactions-header .section-title {
+  margin: 0;
+}
+
+.dashboard-transactions-subtitle {
+  margin: 0;
+  font-size: 13px;
+}
+
 .tx-count-label {
   font-size: 12px;
   font-weight: 600;
@@ -3536,6 +3597,22 @@ table.data-table td {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tx-row-counterparty.searching span {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  word-break: break-all;
+}
+
+.search-highlight {
+  background: color-mix(in srgb, #ffea00 50%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .tx-row-counterparty.sent-to-self strong {

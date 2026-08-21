@@ -89,8 +89,14 @@ def compact_unsigned_for_qr(unsigned: dict) -> dict:
 
     u = copy.deepcopy(unsigned)
     u.pop("draft_hash", None)
+    u.pop("_file_draft_hash", None)
+    u.pop("_accepted_draft_hashes", None)
     u.pop("kpub", None)
     u.pop("xpub", None)
+    # Cosigner hints for SeedMask UI — omitted from PSKT rebuild; must not affect hash.
+    u.pop("multisig_m", None)
+    u.pop("multisig_n", None)
+    u.pop("multisig_cosigners", None)
     if not (u.get("payload_hex") or "").strip():
         u.pop("payload_hex", None)
     for inp in u.get("inputs") or []:
@@ -103,29 +109,127 @@ def compact_unsigned_for_qr(unsigned: dict) -> dict:
     for out in u.get("outputs") or []:
         if isinstance(out, dict):
             out.pop("kaspa_address", None)
+            # UI-only markers — must not affect draft_hash (PSKT rebuild omits them).
+            out.pop("is_change", None)
+            out.pop("change_address_index", None)
+            out.pop("address_index", None)
     return u
+
+
+def _hash_compact_body(body: dict) -> str:
+    payload = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def unsigned_draft_hash(unsigned: dict) -> str:
     """Hash the exact unsigned body SeedMask scans (compact QR payload, no draft_hash)."""
-    payload = json.dumps(compact_unsigned_for_qr(unsigned), sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return _hash_compact_body(compact_unsigned_for_qr(unsigned))
+
+
+def _legacy_draft_hashes(unsigned: dict) -> set[str]:
+    """Hashes stamped by older Coordinators (UI fields still inside the digest)."""
+    import copy
+
+    out: set[str] = set()
+
+    def _variant(*, keep_change: bool, keep_multisig: bool) -> str:
+        u = copy.deepcopy(unsigned)
+        for key in ("draft_hash", "_file_draft_hash", "_accepted_draft_hashes", "kpub", "xpub"):
+            u.pop(key, None)
+        if not keep_multisig:
+            u.pop("multisig_m", None)
+            u.pop("multisig_n", None)
+            u.pop("multisig_cosigners", None)
+        if not (u.get("payload_hex") or "").strip():
+            u.pop("payload_hex", None)
+        for inp in u.get("inputs") or []:
+            if isinstance(inp, dict):
+                for key in (
+                    "receive_address",
+                    "block_daa_score",
+                    "blockDaaScore",
+                    "is_coinbase",
+                    "isCoinbase",
+                ):
+                    inp.pop(key, None)
+        for out_row in u.get("outputs") or []:
+            if isinstance(out_row, dict):
+                out_row.pop("kaspa_address", None)
+                if not keep_change:
+                    out_row.pop("is_change", None)
+                    out_row.pop("change_address_index", None)
+                    out_row.pop("address_index", None)
+        return _hash_compact_body(u).lower()
+
+    for keep_change in (True, False):
+        for keep_multisig in (True, False):
+            out.add(_variant(keep_change=keep_change, keep_multisig=keep_multisig))
+    return out
+
+
+def acceptable_draft_hashes(unsigned: dict) -> set[str]:
+    """All draft_hash values Coordinator will accept for this unsigned body."""
+    accepted: set[str] = {unsigned_draft_hash(unsigned).lower()}
+    accepted |= _legacy_draft_hashes(unsigned)
+    for key in ("draft_hash", "_file_draft_hash"):
+        raw = str(unsigned.get(key) or "").strip().lower()
+        if len(raw) >= 32:
+            accepted.add(raw)
+    extra = unsigned.get("_accepted_draft_hashes")
+    if isinstance(extra, list):
+        for item in extra:
+            raw = str(item or "").strip().lower()
+            if len(raw) >= 32:
+                accepted.add(raw)
+    return accepted
+
+
+def _note_accepted_draft_hash(unsigned: dict, value: str | None) -> None:
+    raw = str(value or "").strip().lower()
+    if len(raw) < 32:
+        return
+    bucket = unsigned.get("_accepted_draft_hashes")
+    if not isinstance(bucket, list):
+        bucket = []
+        unsigned["_accepted_draft_hashes"] = bucket
+    if raw not in bucket:
+        bucket.append(raw)
 
 
 def attach_unsigned_draft_hash(unsigned: dict) -> dict:
+    prior = str(unsigned.get("draft_hash") or "").strip().lower()
+    if len(prior) >= 32:
+        _note_accepted_draft_hash(unsigned, prior)
+        file_hash = str(unsigned.get("_file_draft_hash") or "").strip().lower()
+        if not file_hash:
+            unsigned["_file_draft_hash"] = prior
     unsigned["draft_hash"] = unsigned_draft_hash(unsigned)
+    _note_accepted_draft_hash(unsigned, unsigned["draft_hash"])
     return unsigned
 
 
+def remember_file_draft_hash(unsigned: dict) -> str | None:
+    """Keep the draft_hash embedded in a saved file (SeedMask echoes it when signing that file)."""
+    existing = str(unsigned.get("draft_hash") or "").strip().lower()
+    if not existing or len(existing) < 32:
+        return None
+    # Always remember — even when it matches today's algorithm — so a later PSKT
+    # rebuild / enrich cannot drop the value SeedMask will echo from the same file.
+    unsigned["_file_draft_hash"] = existing
+    _note_accepted_draft_hash(unsigned, existing)
+    return existing
+
+
 def validate_signed_matches_draft_hash(unsigned: dict, signed: dict) -> None:
-    expected = unsigned_draft_hash(unsigned)
+    expected = unsigned_draft_hash(unsigned).lower()
     got = str(signed.get("draft_hash") or "").strip().lower()
-    if got != expected:
-        raise ValueError(
-            "Signed transaction does not match this Review & Sign draft — scan the current QR on SeedMask "
-            f"(do not reuse an older signed file), then import that signed result. "
-            f"Expected draft_hash {expected[:16]}…, got {got[:16] if got else '(missing)'}…"
-        )
+    if got and got in acceptable_draft_hashes(unsigned):
+        return
+    raise ValueError(
+        "Signed transaction does not match this Review & Sign draft — scan the current QR on SeedMask "
+        f"(do not reuse an older signed file), then import that signed result. "
+        f"Expected draft_hash {expected[:16]}…, got {got[:16] if got else '(missing)'}…"
+    )
 
 
 def unsigned_json_for_qr(unsigned: dict) -> str:
@@ -802,16 +906,33 @@ async def broadcast_ready(ready: dict, on_progress=None) -> str:
         if on_progress:
             on_progress(msg)
 
+    def _exit_message(exc: BaseException) -> str:
+        if isinstance(exc, SystemExit):
+            code = exc.code
+            if isinstance(code, str) and code.strip():
+                return code.strip()
+            if code not in (None, 0, 1):
+                return str(code)
+            return "Broadcast failed"
+        return str(exc) or "Broadcast failed"
+
     svc = get_service()
     last_exc: BaseException | None = None
+    # Dedicated RPC client — do not share the wallet-watcher's connection (that
+    # path used to deadlock / hang the UI on "Building…" during Broadcast).
     for attempt in range(3):
+        client = None
         try:
             progress("Connecting to Kaspa mainnet…" if attempt == 0 else "Reconnecting to Kaspa mainnet…")
-            if attempt > 0:
-                await svc._reset_client()
-            client = await svc._get_client()
-            progress("Building transaction…")
-            tx, _fetched = await kaspa_broadcast.ready_to_transaction(ready, client=client)
+            client = await svc.open_fresh_client()
+            progress("Assembling signed transaction…")
+            try:
+                tx, _fetched = await asyncio.wait_for(
+                    kaspa_broadcast.ready_to_transaction(ready, client=client),
+                    timeout=90.0,
+                )
+            except SystemExit as e:
+                raise ValueError(_exit_message(e)) from e
             progress("Submitting to mainnet…")
             result = await asyncio.wait_for(
                 client.submit_transaction({"transaction": tx, "allowOrphan": False}),
@@ -822,13 +943,17 @@ async def broadcast_ready(ready: dict, on_progress=None) -> str:
             return str(result)
         except asyncio.TimeoutError as e:
             raise TimeoutError(
-                "Submit timed out (60s). The tx may still propagate — check kaspa.stream in a minute."
+                "Broadcast timed out. The tx may still propagate — check an explorer in a minute."
             ) from e
+        except SystemExit as e:
+            raise ValueError(_exit_message(e)) from e
         except BaseException as e:
             last_exc = e
             if attempt < 2 and svc._transient_rpc_error(e):
                 continue
             raise _gui_error(e) from e
+        finally:
+            await svc.close_client(client)
     raise _gui_error(last_exc or RuntimeError("Broadcast failed"))
 
 

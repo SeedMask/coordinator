@@ -16,14 +16,18 @@ import {
   txIsReceived,
   txLabel,
 } from '@renderer/utils/txHelpers'
+import { highlightSearchMatch } from '@renderer/utils/highlightSearch'
 
 export function TransactionRow({
   tx,
   onOpenDetails,
+  searchQuery,
 }: {
   tx: import('@renderer/api/types').WalletTxDTO
   /** Lifted to parent so quiet history polls / key remounts do not close Tx details. */
   onOpenDetails?: (tx: import('@renderer/api/types').WalletTxDTO) => void
+  /** Active Dashboard search — matching substrings are highlighted in the row. */
+  searchQuery?: string
 }): React.JSX.Element {
   const {
     selectedChain,
@@ -157,7 +161,9 @@ export function TransactionRow({
         </div>
       ) : (
         <div className="tx-row-label-line">
-          {resolved && <span className="tx-row-label">{resolved}</span>}
+          {resolved && (
+            <span className="tx-row-label">{highlightSearchMatch(resolved, searchQuery)}</span>
+          )}
           <button
             type="button"
             className="tx-row-edit-label"
@@ -173,7 +179,20 @@ export function TransactionRow({
 
       <div className="row spread" style={{ alignItems: 'flex-start' }}>
         <span className={`tx-row-amount${txIsReceived(tx) ? ' inflow' : ' outflow'}`}>
-          {formatTxAmount(tx, selectedChain, bitcoinDisplayUnit)}
+          {(() => {
+            const full = formatTxAmount(tx, selectedChain, bitcoinDisplayUnit)
+            // Never highlight unit suffixes (KAS / BTC / sats) — only the numeric amount.
+            const unitMatch = full.match(/^(.*?)(\s+)(KAS|BTC|sats)$/i)
+            if (!unitMatch) return highlightSearchMatch(full, searchQuery)
+            const [, amountPart, space, unit] = unitMatch
+            return (
+              <>
+                {highlightSearchMatch(amountPart ?? '', searchQuery)}
+                {space}
+                {unit}
+              </>
+            )
+          })()}
         </span>
         <div className="tx-row-datetime">
           <div className="tx-row-status-date">
@@ -208,10 +227,12 @@ export function TransactionRow({
         </div>
       </div>
 
-      <div className={`tx-row-counterparty${sentToSelf ? ' sent-to-self' : ''}`}>
+      <div
+        className={`tx-row-counterparty${sentToSelf ? ' sent-to-self' : ''}${searchQuery?.trim() ? ' searching' : ''}`}
+      >
         {sentToSelf && <strong>Sent to self</strong>}
         <span>
-          {counterpartyPrefix} {counterparty}
+          {counterpartyPrefix} {highlightSearchMatch(counterparty, searchQuery)}
         </span>
       </div>
 
@@ -226,7 +247,7 @@ export function TransactionRow({
             onClick={() => setShowExplorerMenu((open) => !open)}
           >
             <span>Tx ID</span>
-            <code>{(displayTid || tid).slice(0, 16)}…</code>
+            <code>{highlightSearchMatch(`${(displayTid || tid).slice(0, 16)}…`, searchQuery)}</code>
             <ExternalLinkIcon size={14} />
           </button>
           {showExplorerMenu &&
@@ -265,7 +286,7 @@ export function TransactionRow({
         explorer && (
           <a className="tx-row-explorer" href={explorer} target="_blank" rel="noreferrer">
             <span>Tx ID</span>
-            <code>{(displayTid || tid).slice(0, 16)}…</code>
+            <code>{highlightSearchMatch(`${(displayTid || tid).slice(0, 16)}…`, searchQuery)}</code>
             <ExternalLinkIcon size={14} />
           </a>
         )

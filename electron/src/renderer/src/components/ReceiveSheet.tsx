@@ -3,26 +3,22 @@ import QRCode from 'qrcode'
 import { AddressDisplay } from '@renderer/components/AddressDisplay'
 import { useApp } from '@renderer/state/AppProvider'
 import type { AddressRowDTO } from '@renderer/api/types'
-import { addressRowBalance, addressRowHasBalance } from '@renderer/utils/utxoHelpers'
+import {
+  addressRowBalance,
+  addressRowHasBalance,
+  firstUnusedAddressIndex,
+  rowLooksUsed,
+} from '@renderer/utils/utxoHelpers'
 import { copyToClipboard } from '@renderer/utils/clipboard'
 import { coinDisplayUnit, formatCoinUnitsLabel } from '@renderer/utils/coinDisplay'
-
-function rowIsUsed(row: AddressRowDTO): boolean {
-  return row.is_used ?? row.used ?? false
-}
-
-function nextReceiveIndex(receive: AddressRowDTO[], bookIndex?: number): number {
-  if (bookIndex != null) return bookIndex
-  const unused = receive.find((r) => !rowIsUsed(r))
-  return unused?.index ?? receive[0]?.index ?? 0
-}
 
 export function ReceiveSheet({ onClose }: { onClose: () => void }): React.JSX.Element {
   const { addressBook, selectedChain, setStatusMessage, bitcoinDisplayUnit } = useApp()
   const receiveRows = addressBook?.receive ?? []
-  const [selectedIndex, setSelectedIndex] = useState(() =>
-    nextReceiveIndex(receiveRows, addressBook?.next_receive_index),
-  )
+  const preferred = firstUnusedAddressIndex(receiveRows, addressBook?.next_receive_index)
+  const [selectedIndex, setSelectedIndex] = useState(() => preferred?.index ?? 0)
+  /** User picked a specific address from the picker — don't yank them off it mid-session. */
+  const [pinnedByUser, setPinnedByUser] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null)
 
@@ -32,11 +28,19 @@ export function ReceiveSheet({ onClose }: { onClose: () => void }): React.JSX.El
   const unit = coinDisplayUnit(selectedChain, bitcoinDisplayUnit)
 
   useEffect(() => {
-    const idx = nextReceiveIndex(receiveRows, addressBook?.next_receive_index)
-    if (!receiveRows.some((r) => r.index === selectedIndex)) {
-      setSelectedIndex(idx)
+    const next = firstUnusedAddressIndex(receiveRows, addressBook?.next_receive_index)
+    if (!next) return
+    const selected = receiveRows.find((r) => r.index === selectedIndex)
+    if (!selected) {
+      setSelectedIndex(next.index)
+      setPinnedByUser(false)
+      return
     }
-  }, [addressBook?.next_receive_index, receiveRows, selectedIndex])
+    // Auto-advance off used/funded addresses unless the user explicitly pinned one.
+    if (!pinnedByUser && rowLooksUsed(selected) && next.index !== selectedIndex) {
+      setSelectedIndex(next.index)
+    }
+  }, [addressBook?.next_receive_index, receiveRows, selectedIndex, pinnedByUser])
 
   useEffect(() => {
     if (!selectedAddress) {
@@ -58,13 +62,14 @@ export function ReceiveSheet({ onClose }: { onClose: () => void }): React.JSX.El
 
   const statusBlock = useMemo(() => {
     if (!selectedRow) return null
-    const balance = addressRowHasBalance(selectedRow)
+    const hasBal = addressRowHasBalance(selectedRow)
+    const balance = hasBal
       ? formatCoinUnitsLabel(addressRowBalance(selectedRow, selectedChain), selectedChain, bitcoinDisplayUnit)
       : null
     if (balance) {
       return <span className="muted">{balance}</span>
     }
-    if (rowIsUsed(selectedRow)) {
+    if (rowLooksUsed(selectedRow)) {
       if (selectedRow.last_used_at && selectedRow.last_used_at > 0) {
         const date = new Date(selectedRow.last_used_at * 1000).toLocaleDateString('en-GB', {
           day: 'numeric',
@@ -99,7 +104,17 @@ export function ReceiveSheet({ onClose }: { onClose: () => void }): React.JSX.El
             <button type="button" className="receive-picker-btn" onClick={() => setPickerOpen((v) => !v)}>
               <span className="receive-picker-item-main">
                 <span className="receive-picker-index">#{selectedIndex}</span>
-                {selectedRow && rowIsUsed(selectedRow) && <span className="danger-text">Used</span>}
+                {selectedRow && addressRowHasBalance(selectedRow) ? (
+                  <span className="muted receive-picker-balance">
+                    {formatCoinUnitsLabel(
+                      addressRowBalance(selectedRow, selectedChain),
+                      selectedChain,
+                      bitcoinDisplayUnit,
+                    )}
+                  </span>
+                ) : selectedRow && rowLooksUsed(selectedRow) ? (
+                  <span className="danger-text">Used</span>
+                ) : null}
               </span>
               <span className="receive-chevron">⌄</span>
             </button>
@@ -112,6 +127,7 @@ export function ReceiveSheet({ onClose }: { onClose: () => void }): React.JSX.El
                     className={`receive-picker-item${row.index === selectedIndex ? ' active' : ''}`}
                     onClick={() => {
                       setSelectedIndex(row.index)
+                      setPinnedByUser(true)
                       setPickerOpen(false)
                     }}
                   >
@@ -122,7 +138,9 @@ export function ReceiveSheet({ onClose }: { onClose: () => void }): React.JSX.El
                           {formatCoinUnitsLabel(addressRowBalance(row, selectedChain), selectedChain, bitcoinDisplayUnit)}
                         </span>
                       )}
-                      {rowIsUsed(row) && <span className="danger-text">Used</span>}
+                      {!addressRowHasBalance(row) && rowLooksUsed(row) && (
+                        <span className="danger-text">Used</span>
+                      )}
                     </span>
                     {row.index === selectedIndex && <span className="accent-text">✓</span>}
                   </button>

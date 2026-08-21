@@ -386,7 +386,9 @@ class Coordinator:
         )
         return total, keys
 
-    async def refresh_watch(self, wallet_id: str | None = None) -> dict:
+    async def refresh_watch(
+        self, wallet_id: str | None = None, extra_addresses: list[str] | None = None
+    ) -> dict:
         """Hot mainnet refresh: re-query indexed / watched addresses only."""
         cfg = self.get_wallet(wallet_id)
         if not cfg:
@@ -402,6 +404,10 @@ class Coordinator:
         from .watch_addresses import watch_addresses_for_wallet
 
         watch = watch_addresses_for_wallet(cfg.id, cfg, prior)
+        for raw in extra_addresses or []:
+            addr = str(raw or "").strip()
+            if addr and addr not in watch:
+                watch.append(addr)
 
         if coin == "bitcoin":
             from .bitcoin_service import _utxo_dict, get_bitcoin_service
