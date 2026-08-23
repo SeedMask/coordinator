@@ -11,11 +11,14 @@ This is the only supported coordinator desktop app.
 cd ..   # SeedMask_Coordinator
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+# Optional (legacy Tk scanner only): .venv/bin/pip install opencv-python-headless
 
 cd electron
 npm install
 npm run dev
 ```
+
+Camera QR in the UI is **jsqr** in the renderer — OpenCV is not required for development or releases.
 
 ## Production release (self-contained installers)
 
@@ -39,7 +42,7 @@ First run takes **several minutes** (pip downloads + packaging). On macOS you ge
 
 This will:
 
-1. Bundle Python + Node + Kaspa WASM into `build/runtime/`
+1. Bundle Python + Node + Kaspa WASM into `build/runtime/` (then trim headers / pip / tests; no OpenCV)
 2. Build the Electron UI
 3. Produce installers in `release/`
 4. Smoke-test the bundled backend
@@ -78,7 +81,7 @@ Host `coordinator/website/` on any static host if you use that path.
 | Preload | `src/preload/` | Safe IPC bridge |
 | Renderer | `src/renderer/src/` | React UI → HTTP API |
 | Backend | `../app/` | Wallet logic (see `MIGRATION_INVENTORY.md`) |
-| Runtime | `build/runtime/` | Bundled Python venv, Node, Kaspa WASM (packaged only) |
+| Runtime | `build/runtime/` | Bundled Python + Node + Kaspa WASM (packaged only; trimmed for size) |
 
 ## Environment variables
 
@@ -94,6 +97,8 @@ Host `coordinator/website/` on any static host if you use that path.
 
 - Python **3.10–3.13** (kaspa SDK does not support 3.14+)
 - Network access (pip + nodejs.org + optional Kaspa WASM download)
-- ~500MB disk for bundled runtime
+- ~300MB disk for the trimmed `build/runtime/` (~600MB for the packaged `.app` on macOS arm64)
+
+`scripts/bundle_runtime.sh` installs from `../requirements.txt`, then removes Node `include`/`share`, pip/setuptools/wheel, idle/tk/test demos, `__pycache__`, and any OpenCV/numpy if present. Camera QR stays in Electron (`jsqr`).
 
 See also: [`../MIGRATION_INVENTORY.md`](../MIGRATION_INVENTORY.md)

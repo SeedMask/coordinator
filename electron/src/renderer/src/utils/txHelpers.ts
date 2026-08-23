@@ -1,6 +1,7 @@
 import type { BitcoinDisplayUnit, CoinChain, WalletTxDTO } from '@renderer/api/types'
 import { looksLikeBitcoinAddress, looksLikeKaspaAddress } from '@renderer/api/types'
 import { formatCoinUnitsLabel } from '@renderer/utils/coinDisplay'
+import { formatClock } from '@renderer/utils/dateTimeFormat'
 
 /** Drop obvious cross-chain leakage; do not require counterparty to look like a valid address. */
 export function txMatchesChain(tx: WalletTxDTO, chain: CoinChain): boolean {
@@ -180,10 +181,7 @@ export function formatTxDate(tx: WalletTxDTO): string {
 export function formatTxClock(tx: WalletTxDTO): string {
   const t = txBlockTime(tx)
   if (t <= 0) return ''
-  const d = new Date(t * 1000)
-  const hours = d.getHours().toString().padStart(2, '0')
-  const minutes = d.getMinutes().toString().padStart(2, '0')
-  return `${hours}:${minutes}`
+  return formatClock(new Date(t * 1000))
 }
 
 export function formatTxTime(tx: WalletTxDTO): string {

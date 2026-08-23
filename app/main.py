@@ -2752,16 +2752,20 @@ async def tx_broadcast(body: FinishIn):
             str(summary.get("change_address") or "").strip(),
         ]
         touch = [a for a in touch if a]
-        try:
-            if touch:
-                await _coordinator.refresh_watch(wallet_id=wid, extra_addresses=touch)
-            else:
-                await _wallet_watcher.nudge_wallet(wid)
-        except Exception:
+
+        async def _post_broadcast_refresh() -> None:
             try:
-                await _wallet_watcher.nudge_wallet(wid)
+                if touch:
+                    await _coordinator.refresh_watch(wallet_id=wid, extra_addresses=touch)
+                else:
+                    await _wallet_watcher.nudge_wallet(wid)
             except Exception:
-                pass
+                try:
+                    await _wallet_watcher.nudge_wallet(wid)
+                except Exception:
+                    pass
+
+        asyncio.create_task(_post_broadcast_refresh())
     except FileNotFoundError as e:
         raise HTTPException(404, str(e)) from e
     except Exception as e:

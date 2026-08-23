@@ -190,6 +190,84 @@ bundle_standalone_python() {
   fi
 }
 
+# Drop packaging-only bulk that is never used at runtime (headers, pip, tests, caches).
+# Keeps Electron QR (jsqr) + Kaspa WASM/Node validation intact.
+trim_shipped_runtime() {
+  local py_lib site pyver_dir
+  echo "==> Trim shipped runtime (size)…"
+
+  # Node: headers (~50MB) and man pages are unused for validate_pskt.mjs
+  rm -rf "$NODE_DIR/include" "$NODE_DIR/share"
+  find "$NODE_DIR" -maxdepth 1 -type f \( -name '*.md' -o -name 'CHANGELOG*' \) -delete 2>/dev/null || true
+
+  if [[ "$PLATFORM" == "win32" ]]; then
+    py_lib="$PYDIR/Lib"
+    site="$py_lib/site-packages"
+    rm -rf \
+      "$PYDIR/Scripts/pip"* \
+      "$PYDIR/Scripts/wheel"* \
+      "$py_lib/ensurepip" \
+      "$py_lib/idlelib" \
+      "$py_lib/turtledemo" \
+      "$py_lib/tkinter" \
+      "$py_lib/test" \
+      "$site/pip" \
+      "$site"/pip-*.dist-info \
+      "$site/wheel" \
+      "$site"/wheel-*.dist-info \
+      "$site/setuptools" \
+      "$site"/setuptools-*.dist-info \
+      "$site/pkg_resources" \
+      "$site/_distutils_hack" \
+      "$site/distutils-precedence.pth"
+  else
+    py_lib="$PYDIR/lib"
+    pyver_dir="$(find "$py_lib" -maxdepth 1 -type d -name 'python3.*' | head -n 1)"
+    if [[ -z "$pyver_dir" || ! -d "$pyver_dir" ]]; then
+      echo "error: could not locate lib/python3.x under $PYDIR" >&2
+      exit 1
+    fi
+    site="$pyver_dir/site-packages"
+    rm -rf \
+      "$PYDIR/bin/pip" "$PYDIR/bin/pip3" \
+      "$PYDIR/bin"/pip3.* \
+      "$PYDIR/bin/wheel" \
+      "$pyver_dir/ensurepip" \
+      "$pyver_dir/idlelib" \
+      "$pyver_dir/turtledemo" \
+      "$pyver_dir/tkinter" \
+      "$pyver_dir/test" \
+      "$site/pip" \
+      "$site"/pip-*.dist-info \
+      "$site/wheel" \
+      "$site"/wheel-*.dist-info \
+      "$site/setuptools" \
+      "$site"/setuptools-*.dist-info \
+      "$site/pkg_resources" \
+      "$site/_distutils_hack" \
+      "$site/distutils-precedence.pth"
+  fi
+
+  # Never ship OpenCV/numpy even if an old requirements.txt pulled them in
+  rm -rf \
+    "$site"/cv2 \
+    "$site"/opencv* \
+    "$site"/numpy \
+    "$site"/numpy-* \
+    "$site"/numpy.libs \
+    "$site"/numpy.libs*
+
+  # Bytecode caches + package test trees (stdlib test/ already removed above)
+  find "$PYDIR" -type d -name '__pycache__' -print0 2>/dev/null | xargs -0 rm -rf 2>/dev/null || true
+  if [[ -d "$site" ]]; then
+    find "$site" -type d \( -name 'tests' -o -name 'test' -o -name 'testing' \) -print0 2>/dev/null | xargs -0 rm -rf 2>/dev/null || true
+  fi
+  find "$PYDIR" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete 2>/dev/null || true
+
+  du -sh "$RUNTIME" "$PYDIR" "$NODE_DIR" 2>/dev/null || true
+  echo "    Trim complete"
+}
+
 bundle_standalone_python
 
 echo "==> Node runtime (PSKT validation)…"
@@ -256,5 +334,7 @@ fi
 cp "$TOOLS_WASM/validate_pskt.mjs" "$WASM_DST/"
 cp -R "$TOOLS_WASM/sdk_v2" "$WASM_DST/sdk_v2"
 test -f "$WASM_DST/sdk_v2/kaspa_bg.wasm"
+
+trim_shipped_runtime
 
 echo "==> Runtime OK → $RUNTIME"

@@ -45,5 +45,5 @@ else
 fi
 
 echo "[preflight] ok (node $(node -v))"
-echo "[preflight] full release takes several minutes on first run (pip + ~300MB installer)"
+echo "[preflight] full release takes several minutes on first run (pip + trimmed runtime; ~200–220MB macOS installer typical)"
 echo ""

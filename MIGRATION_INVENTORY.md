@@ -47,7 +47,7 @@ Legend:
 | `wallet_watcher.py` | **KEEP** | SSE live balance events | kaspa_service |
 | `watch_addresses.py` | **KEEP** | Next receive address | address_usage, kaspa/bitcoin services |
 | `kaspa_generator.py` | **KEEP** | Kaspa tx generator path | kaspa pip |
-| `qr_scanner.py` | **KEEP** | OpenCV QR decode (server-side) | opencv — desktop only |
+| `qr_scanner.py` | **KEEP** (unused by Electron) | Legacy Tk camera QR; packaged app uses Electron/`jsqr` | optional `opencv-python-headless` (not in `requirements.txt` / not shipped) |
 | `signed_ur_assembly.py` | **KEEP** | Multi-frame signed UR ingest | bcur |
 | `ur_qr.py` | **KEEP** | Fountain QR encode (Kaspa JSON) | bcur |
 | `ur_qr_psbt.py` | **KEEP** | Fountain QR encode (PSBT) | bcur, ur_qr |

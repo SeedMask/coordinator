@@ -1,4 +1,5 @@
 import type { CoinChain, WalletTxDTO } from '@renderer/api/types'
+import { formatClock, formatDateAndClock } from '@renderer/utils/dateTimeFormat'
 import {
   dedupeWalletTransactions,
   normalizeWalletTx,
@@ -297,11 +298,11 @@ export function formatHoverDate(date: Date): string {
 }
 
 export function formatHoverTime(date: Date): string {
-  return date.toLocaleTimeString(undefined, { timeStyle: 'short' })
+  return formatClock(date)
 }
 
 export function formatExactDate(date: Date): string {
-  return date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  return formatDateAndClock(date)
 }
 
 /** Convert chart coin amount to BTC/KAS units for fiat pricing (sats → BTC). */

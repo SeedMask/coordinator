@@ -56,6 +56,8 @@ Artifacts land in `SeedMask_Coordinator/electron/release/`.
 
 First run can take several minutes (bundled Python/Node runtime + packaging).
 
+`bundle_runtime.sh` ships a **trimmed** runtime: no Node C headers, no pip/setuptools in the final tree, no OpenCV/numpy (Electron uses `jsqr` for camera QR). Expect roughly ~200–220MB compressed installers on macOS arm64 after trim (exact size varies by Electron/deps).
+
 ## Website downloads
 
 Public downloads for end users are linked from **[seedmask.io/app](https://seedmask.io/app)** to GitHub Release assets (macOS `.dmg`, Windows `.exe`).

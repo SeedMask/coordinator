@@ -11,6 +11,8 @@ export type SidebarSection =
 
 export type AppTheme = 'light' | 'dark' | 'dim'
 export type BitcoinDisplayUnit = 'btc' | 'sats'
+/** Clock display: follow the OS, or force 12-hour / 24-hour. */
+export type TimeFormat = 'system' | '12h' | '24h'
 
 export type DisplayCurrency = 'USD' | 'EUR' | 'GBP' | 'JPY' | 'CAD' | 'CHF' | 'AUD'
 

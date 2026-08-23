@@ -1694,7 +1694,7 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
       const touch = [buildSummary?.toAddress ?? toAddress, buildSummary?.changeAddress]
         .map((a) => (a ?? '').trim())
         .filter(Boolean)
-      await refreshAfterSuccessfulSend(touch)
+      void refreshAfterSuccessfulSend(touch)
     } catch (e) {
       const msg = e instanceof APIError ? apiError(e.status ?? 400, e.message) : e instanceof Error ? e.message : 'Broadcast failed'
       setBuildError(msg)
@@ -2453,9 +2453,16 @@ export function SendWizardView({ onClose }: { onClose: () => void }): React.JSX.
     <div className={`send-wizard${step === STEP_REVIEW ? ' send-wizard-review' : ''}`} ref={layoutRef}>
       {!broadcastDone && (
       <div className="send-wizard-top">
-        <button type="button" className="send-wizard-back" onClick={onClose}>
+        <button
+          type="button"
+          className="send-wizard-back"
+          onClick={() => {
+            if (step === STEP_REVIEW) setStep(STEP_SEND)
+            else onClose()
+          }}
+        >
           <ChevronLeftIcon />
-          Dashboard
+          {step === STEP_REVIEW ? 'Back' : 'Dashboard'}
         </button>
         <div className="send-wizard-steps">
           {STEP_TITLES.map((title, i) => (

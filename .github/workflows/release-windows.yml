@@ -10,7 +10,7 @@ on:
       release_tag:
         description: "Existing GitHub Release tag to attach Windows assets to (e.g. v1.0.6). Leave empty to upload Actions artifacts only."
         required: false
-        default: "v1.0.8"
+        default: "v1.0.9"
 
 permissions:
   contents: write
@@ -120,7 +120,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
-          name: SeedMask Coordinator 1.0.8
+          name: SeedMask Coordinator 1.0.9
           body_path: .github/release-notes.md
           draft: false
           prerelease: false

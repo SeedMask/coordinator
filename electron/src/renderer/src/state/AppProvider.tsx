@@ -18,6 +18,7 @@ import type {
   BitcoinNetworkSettingsDTO,
   CoinChain,
   DisplayCurrency,
+  TimeFormat,
   NetworkSettingsDTO,
   NetworkSettingsEnvelope,
   SidebarSection,
@@ -146,6 +147,8 @@ interface AppContextValue {
   setChunkAddresses: (v: boolean) => void
   bitcoinDisplayUnit: BitcoinDisplayUnit
   setBitcoinDisplayUnit: (u: BitcoinDisplayUnit) => void
+  timeFormat: TimeFormat
+  setTimeFormat: (f: TimeFormat) => void
   fiatTick: number
   networkSettingsEnvelope: NetworkSettingsEnvelope | null
   networkSettings: NetworkSettingsDTO | null
@@ -268,6 +271,7 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
   const [displayCurrency, setDisplayCurrencyState] = useState<DisplayCurrency>(() => UserPrefs.displayCurrency)
   const [chunkAddresses, setChunkAddressesState] = useState(() => UserPrefs.chunkAddresses)
   const [bitcoinDisplayUnit, setBitcoinDisplayUnitState] = useState(() => UserPrefs.bitcoinDisplayUnit)
+  const [timeFormat, setTimeFormatState] = useState<TimeFormat>(() => UserPrefs.timeFormat)
   const [networkSettingsEnvelope, setNetworkSettingsEnvelope] = useState<NetworkSettingsEnvelope | null>(null)
   const [networkSettingsSaving, setNetworkSettingsSaving] = useState(false)
   const [renamingWalletId, setRenamingWalletId] = useState<string | null>(null)
@@ -380,6 +384,11 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
   const setBitcoinDisplayUnit = useCallback((u: BitcoinDisplayUnit) => {
     setBitcoinDisplayUnitState(u)
     UserPrefs.bitcoinDisplayUnit = u
+  }, [])
+
+  const setTimeFormat = useCallback((f: TimeFormat) => {
+    setTimeFormatState(f)
+    UserPrefs.timeFormat = f
   }, [])
 
   function schedulePersistSnapshots(): void {
@@ -2777,6 +2786,8 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     setChunkAddresses,
     bitcoinDisplayUnit,
     setBitcoinDisplayUnit,
+    timeFormat,
+    setTimeFormat,
     fiatTick,
     networkSettingsEnvelope,
     networkSettings,

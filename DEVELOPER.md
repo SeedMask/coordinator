@@ -22,10 +22,10 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-Optional: Kaspa Python SDK for broadcast tests:
+Camera QR in the Electron UI uses **jsqr** (no OpenCV). Optional only if you run the legacy Tk scanner (`app/qr_scanner.py`):
 
 ```bash
-.venv/bin/pip install kaspa
+.venv/bin/pip install opencv-python-headless
 ```
 
 Node for rusty-kaspa WASM validation:
@@ -57,7 +57,7 @@ npm run dev
 
 ## Build shipping app
 
-Bundles Python, Node, and Kaspa WASM into the Electron package. From `electron/` **on the target OS**:
+Bundles Python, Node, and Kaspa WASM into the Electron package, then **trims** unused bulk (Node headers, pip/setuptools, stdlib demos/tests, `__pycache__`). OpenCV/numpy are not installed for the ship runtime. From `electron/` **on the target OS**:
 
 ```bash
 cd SeedMask_Coordinator/electron

@@ -1,4 +1,7 @@
-"""Camera QR scanner for desktop coordinator (signed JSON or kaspa: address)."""
+"""Legacy Tk + OpenCV QR scanner (optional; Electron UI uses jsqr instead).
+
+Not used by the packaged desktop app. Requires: pip install opencv-python-headless
+"""
 
 from __future__ import annotations
 

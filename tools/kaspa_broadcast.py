@@ -135,16 +135,15 @@ def input_script_public_key(inp: dict, index: int):
 
 
 def _validate_multisig_ready_input(inp: dict, index: int) -> None:
-    """Catch common multisig finalize mistakes before the node rejects the tx."""
+    """Catch common multisig finalize mistakes before the node rejects the tx.
+
+    A Schnorr P2PK signature_script is a 65-byte push and usually starts with ``41``.
+    That is singlesig. Only run this check when a redeem script is actually present.
+    """
     redeem = str(inp.get("redeem_script_hex") or "").strip().lower().replace("0x", "")
     sig_script = str(inp.get("signature_script") or inp.get("sig_hex") or "").strip().lower().replace("0x", "")
-    if not redeem and not sig_script.startswith(("41", "4c", "4d")):
-        return
     if not redeem:
-        raise SystemExit(
-            f"input #{index}: multisig signature_script present but redeem_script_hex is missing.\n"
-            "  Rebuild the unsigned draft on Send, re-sign on every cosigner, then Finish again."
-        )
+        return
     if not sig_script:
         return
     try:

@@ -23,6 +23,8 @@ import {
 import { copyToClipboard } from '@renderer/utils/clipboard'
 import { InfoTipButton } from '@renderer/components/settings/SettingsChrome'
 import { isBitcoinHighFee, isKaspaHighFee } from '@renderer/utils/feeWarnings'
+import { formatDateAndClock } from '@renderer/utils/dateTimeFormat'
+import { useApp } from '@renderer/state/AppProvider'
 
 type OutputKind = 'recipient' | 'change' | 'fee'
 
@@ -650,6 +652,7 @@ export function TxVisualizeBody({
   bitcoinDisplayUnit: BitcoinDisplayUnit
   showIoLists?: boolean
 }): React.JSX.Element {
+  const { timeFormat } = useApp()
   const unitPrice = useTxUnitPrice(model.chain, displayCurrency, model.blockTime)
 
   return (
@@ -666,7 +669,11 @@ export function TxVisualizeBody({
                     <InfoTipButton text={metadataTipForLabel(row.label)!} />
                   )}
                 </div>
-                <div>{row.value}</div>
+                <div>
+                  {row.label === 'Timestamp' && model.blockTime
+                    ? formatDateAndClock(new Date(model.blockTime * 1000), timeFormat)
+                    : row.value}
+                </div>
                 {row.detail && <div className="muted" style={{ fontSize: 11 }}>{row.detail}</div>}
               </div>
             ))}
@@ -790,6 +797,7 @@ export function TransactionVisualizeView({
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [txidCopied, setTxidCopied] = useState(false)
   const [hexCopied, setHexCopied] = useState(false)
+  const { timeFormat } = useApp()
 
   const active = model ?? fallback
 
@@ -899,7 +907,11 @@ export function TransactionVisualizeView({
                           <InfoTipButton text={metadataTipForLabel(row.label)!} />
                         )}
                       </div>
-                      <div>{row.value}</div>
+                      <div>
+                        {row.label === 'Timestamp' && active.blockTime
+                          ? formatDateAndClock(new Date(active.blockTime * 1000), timeFormat)
+                          : row.value}
+                      </div>
                       {row.detail && <div className="muted" style={{ fontSize: 11 }}>{row.detail}</div>}
                     </div>
                   ))}

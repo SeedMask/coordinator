@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from '@renderer/state/AppProvider'
-import type { AppTheme, DisplayCurrency } from '@renderer/api/types'
+import type { AppTheme, DisplayCurrency, TimeFormat } from '@renderer/api/types'
 import { SeedMaskLogoMark } from '@renderer/components/BrandMarks'
 import { SettingsNavIcon } from '@renderer/components/icons'
 import {
@@ -130,7 +130,17 @@ export function SystemSettingsView(): React.JSX.Element {
 }
 
 function GeneralSettingsPanel(): React.JSX.Element {
-  const { appTheme, setAppTheme, displayCurrency, setDisplayCurrency, chunkAddresses, setChunkAddresses, buildLabel } = useApp()
+  const {
+    appTheme,
+    setAppTheme,
+    displayCurrency,
+    setDisplayCurrency,
+    timeFormat,
+    setTimeFormat,
+    chunkAddresses,
+    setChunkAddresses,
+    buildLabel,
+  } = useApp()
   const updateStatus = useUpdaterStatus()
   const [updateBusy, setUpdateBusy] = useState(false)
 
@@ -194,35 +204,66 @@ function GeneralSettingsPanel(): React.JSX.Element {
         </div>
       </SettingsSectionBlock>
 
-      <SettingsSectionBlock title="Display currency">
-        <div className="settings-currency-control">
-          <label className="settings-currency-select-wrap">
-            <span className="sr-only">Currency</span>
-            <select
-              className="settings-currency-select"
-              value={displayCurrency}
-              onChange={(e) => setDisplayCurrency(e.target.value as DisplayCurrency)}
-            >
-              {(['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'CHF', 'AUD'] as DisplayCurrency[]).map((c) => (
-                <option key={c} value={c}>
-                  {c} · {CURRENCY_SYMBOLS[c]}
-                </option>
-              ))}
-            </select>
-            <svg className="settings-currency-caret" viewBox="0 0 12 8" width="12" height="8" aria-hidden>
-              <path
-                d="M1.2 1.6 L6 6.4 L10.8 1.6"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </label>
-          <InfoTipButton text="Fiat amounts on the dashboard and when sending." />
+      <section className="settings-section settings-prefs-pair">
+        <div className="settings-pref-field">
+          <h3>Display currency</h3>
+          <div className="settings-currency-control">
+            <label className="settings-currency-select-wrap">
+              <span className="sr-only">Currency</span>
+              <select
+                className="settings-currency-select"
+                value={displayCurrency}
+                onChange={(e) => setDisplayCurrency(e.target.value as DisplayCurrency)}
+              >
+                {(['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'CHF', 'AUD'] as DisplayCurrency[]).map((c) => (
+                  <option key={c} value={c}>
+                    {c} · {CURRENCY_SYMBOLS[c]}
+                  </option>
+                ))}
+              </select>
+              <svg className="settings-currency-caret" viewBox="0 0 12 8" width="12" height="8" aria-hidden>
+                <path
+                  d="M1.2 1.6 L6 6.4 L10.8 1.6"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </label>
+            <InfoTipButton text="Fiat amounts on the dashboard and when sending." />
+          </div>
         </div>
-      </SettingsSectionBlock>
+        <div className="settings-pref-field">
+          <h3>Time format</h3>
+          <div className="settings-currency-control">
+            <label className="settings-currency-select-wrap">
+              <span className="sr-only">Time format</span>
+              <select
+                className="settings-currency-select"
+                value={timeFormat}
+                onChange={(e) => setTimeFormat(e.target.value as TimeFormat)}
+              >
+                <option value="system">System</option>
+                <option value="12h">12-hour</option>
+                <option value="24h">24-hour</option>
+              </select>
+              <svg className="settings-currency-caret" viewBox="0 0 12 8" width="12" height="8" aria-hidden>
+                <path
+                  d="M1.2 1.6 L6 6.4 L10.8 1.6"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </label>
+            <InfoTipButton text="System follows this computer. 12-hour shows AM/PM. 24-hour uses hours 0–23." />
+          </div>
+        </div>
+      </section>
 
       <section className="settings-section">
         <SettingsToggleRow

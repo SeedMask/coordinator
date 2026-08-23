@@ -1,4 +1,4 @@
-import type { AppTheme, BitcoinDisplayUnit, CoinChain, DisplayCurrency } from '@renderer/api/types'
+import type { AppTheme, BitcoinDisplayUnit, CoinChain, DisplayCurrency, TimeFormat } from '@renderer/api/types'
 
 const KEYS = {
   theme: 'seedmask.theme',
@@ -7,6 +7,7 @@ const KEYS = {
   welcome: 'seedmask.hasSeenWelcome',
   chunkAddresses: 'seedmask.chunkAddresses',
   bitcoinDisplayUnit: 'seedmask.bitcoinDisplayUnit',
+  timeFormat: 'seedmask.timeFormat',
   walletOrder: 'seedmask.walletOrder',
   walletStripHiddenBalances: 'seedmask.walletStripHiddenBalances',
 } as const
@@ -61,6 +62,14 @@ export const UserPrefs = {
   },
   set bitcoinDisplayUnit(v: BitcoinDisplayUnit) {
     localStorage.setItem(KEYS.bitcoinDisplayUnit, v)
+  },
+  get timeFormat(): TimeFormat {
+    const v = localStorage.getItem(KEYS.timeFormat)
+    if (v === '12h' || v === '24h' || v === 'system') return v
+    return 'system'
+  },
+  set timeFormat(v: TimeFormat) {
+    localStorage.setItem(KEYS.timeFormat, v)
   },
   walletOrder(chain: CoinChain): string[] {
     const store = readWalletOrderStore()
